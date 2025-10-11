@@ -1,152 +1,118 @@
 import discord
 from discord import app_commands
+from discord.ext import tasks
 import datetime
+import asyncio
 import os
 
-# IntentsとBotの初期化
+# ====== 設定 ======
+TOKEN = os.getenv("DISCORD_BOT_TOKEN")  # Render の環境変数で設定
+GUILD_ID = int(os.getenv("DISCORD_GUILD_ID", 0))  # サーバーID（任意）
+CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", 0))  # 投票を送るチャンネルID（任意）
+
+# ====== Bot初期化 ======
 intents = discord.Intents.default()
-intents.message_content = True
+intents.message_content = True  # メッセージ内容を扱う場合のみ必要
 bot = discord.Client(intents=intents)
 tree = app_commands.CommandTree(bot)
 
-# 投票データ
-vote_data = {}
+# ====== 投票データ ======
+vote_data = {}  # {date_str: {"votes": {"user": "option"}}}
 
-# 投票用View
+# ====== 投票UI ======
 class VoteView(discord.ui.View):
     def __init__(self, date_str):
         super().__init__(timeout=None)
         self.date_str = date_str
 
-    @discord.ui.button(label="参加(🟢)", style=discord.ButtonStyle.green)
+    @discord.ui.button(label="参加", style=discord.ButtonStyle.green)
     async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.register_vote(interaction, "参加(🟢)")
-
-    @discord.ui.button(label="調整可(🟡)", style=discord.ButtonStyle.blurple)
-    async def maybe(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.register_vote(interaction, "調整可(🟡)")
-
-    @discord.ui.button(label="不可(🔴)", style=discord.ButtonStyle.red)
-    async def no(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.register_vote(interaction, "不可(🔴)")
-
-    async def register_vote(self, interaction: discord.Interaction, status: str):
         user = interaction.user.name
-        message_id = interaction.message.id
+        vote_data.setdefault(self.date_str, {"votes": {}})
+        vote_data[self.date_str]["votes"][user] = "参加"
+        await interaction.response.send_message(f"{user} さんが『参加』に投票しました。", ephemeral=True)
 
-        if message_id not in vote_data:
-            vote_data[message_id] = {}
+    @discord.ui.button(label="未定", style=discord.ButtonStyle.gray)
+    async def maybe(self, interaction: discord.Interaction, button: discord.ui.Button):
+        user = interaction.user.name
+        vote_data.setdefault(self.date_str, {"votes": {}})
+        vote_data[self.date_str]["votes"][user] = "未定"
+        await interaction.response.send_message(f"{user} さんが『未定』に投票しました。", ephemeral=True)
 
-        if self.date_str not in vote_data[message_id]:
-            vote_data[message_id][self.date_str] = {
-                "参加(🟢)": [], "調整可(🟡)": [], "不可(🔴)": []
-            }
+    @discord.ui.button(label="不参加", style=discord.ButtonStyle.red)
+    async def decline(self, interaction: discord.Interaction, button: discord.ui.Button):
+        user = interaction.user.name
+        vote_data.setdefault(self.date_str, {"votes": {}})
+        vote_data[self.date_str]["votes"][user] = "不参加"
+        await interaction.response.send_message(f"{user} さんが『不参加』に投票しました。", ephemeral=True)
 
-        # 他の選択肢から削除
-        for k in vote_data[message_id][self.date_str]:
-            if user in vote_data[message_id][self.date_str][k]:
-                vote_data[message_id][self.date_str][k].remove(user)
-
-        # 新しい選択肢に追加
-        vote_data[message_id][self.date_str][status].append(user)
-
-        # Embed更新
-        embed = interaction.message.embeds[0]
-        for k in ["参加(🟢)", "調整可(🟡)", "不可(🔴)"]:
-            users = vote_data[message_id][self.date_str][k]
-            embed.set_field_at(
-                ["参加(🟢)", "調整可(🟡)", "不可(🔴)"].index(k),
-                name=k,
-                value="\n".join(users) if users else "なし",
-                inline=False
-            )
-
-        await interaction.response.edit_message(embed=embed, view=self)
-
-# ✅ 修正版 /schedule コマンド（3週間後の日曜から7日間）
-@tree.command(name="schedule", description="日程調整を開始します")
+# ====== /schedule コマンド ======
+@tree.command(name="schedule", description="3週間後の日程投票を開始します")
 async def schedule(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.send_message("3週間後の日程を作成します...", ephemeral=True)
 
-    today = datetime.date.today()
+    date = datetime.date.today() + datetime.timedelta(weeks=3)
+    date_str = date.strftime("%Y-%m-%d")
 
-    # 今日から3週間後
-    target = today + datetime.timedelta(weeks=3)
-
-    # その週の日曜日を取得（weekday()で0=月曜,6=日曜）
-    days_to_sunday = (6 - target.weekday()) % 7
-    start_date = target + datetime.timedelta(days=days_to_sunday)
-
-    # 日曜から7日分を生成
-    dates = [(start_date + datetime.timedelta(days=i)).strftime("%m/%d(%a)") for i in range(7)]
-
-    for d in dates:
-        embed = discord.Embed(title=f"【日程候補】{d}", description="以下のボタンで投票してください")
-        embed.add_field(name="参加(🟢)", value="なし", inline=False)
-        embed.add_field(name="調整可(🟡)", value="なし", inline=False)
-        embed.add_field(name="不可(🔴)", value="なし", inline=False)
-        await interaction.channel.send(embed=embed, view=VoteView(d))
-
-    await interaction.followup.send(
-        f"📅 {start_date.strftime('%m/%d(%a)')} からの1週間の日程候補を作成しました！",
-        ephemeral=True
+    embed = discord.Embed(
+        title=f"📅 {date_str} の予定調整",
+        description="以下のボタンから出欠を入力してください。",
+        color=0x2ECC71,
     )
+    embed.set_footer(text="自動生成されたスケジュール投票です。")
 
-# /event_now コマンド（突発イベント）
-@tree.command(name="event_now", description="突発イベントを作成")
-@app_commands.describe(
-    title="イベント名",
-    description="詳細（任意）",
-    date="投票日程（複数可、カンマ区切り、形式: YYYY-MM-DD、例: 2025-10-06）"
-)
-async def event_now(
-    interaction: discord.Interaction,
-    title: str,
-    date: str,
-    description: str = ""
-):
-    await interaction.response.defer(ephemeral=True)
+    channel = interaction.guild.get_channel(CHANNEL_ID)
+    if channel:
+        await channel.send(embed=embed, view=VoteView(date_str))
+        await interaction.followup.send(f"{channel.mention} に投票を作成しました！", ephemeral=True)
+    else:
+        await interaction.followup.send("チャンネルが見つかりません。CHANNEL_IDを確認してください。", ephemeral=True)
 
-    dates = []
-    for d in date.split(","):
-        d_clean = d.strip()
-        parsed = None
-        for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
-            try:
-                parsed = datetime.datetime.strptime(d_clean, fmt).strftime("%m/%d(%a)")
-                break
-            except ValueError:
-                continue
-        if not parsed:
-            await interaction.followup.send(
-                f"⚠️ 日付フォーマットが不正です: {d_clean}（正しい形式: YYYY-MM-DD または YYYY/MM/DD）",
-                ephemeral=True
-            )
-            return
-        dates.append(parsed)
+# ====== /event_now コマンド ======
+@tree.command(name="event_now", description="現在の投票状況を確認します")
+async def event_now(interaction: discord.Interaction):
+    if not vote_data:
+        await interaction.response.send_message("まだ投票がありません。", ephemeral=True)
+        return
 
-    for d in dates:
-        embed = discord.Embed(title=f"【突発イベント】{title} - {d}", description=description or "詳細なし")
-        embed.add_field(name="参加(🟢)", value="なし", inline=False)
-        embed.add_field(name="調整可(🟡)", value="なし", inline=False)
-        embed.add_field(name="不可(🔴)", value="なし", inline=False)
-        await interaction.channel.send(embed=embed, view=VoteView(d))
+    message = ""
+    for date, data in vote_data.items():
+        message += f"**{date} の投票状況：**\n"
+        for user, choice in data["votes"].items():
+            message += f"・{user} → {choice}\n"
+        message += "\n"
 
-    await interaction.followup.send(f"🚨 イベント「{title}」を作成しました！", ephemeral=True)
+    await interaction.response.send_message(message, ephemeral=True)
 
-# Bot起動時にコマンド同期
+# ====== 自動タスク ======
+@tasks.loop(hours=24)
+async def auto_schedule_task():
+    now = datetime.datetime.now()
+    if now.weekday() == 6 and now.hour == 9:  # 日曜の9時に実行
+        guild = bot.get_guild(GUILD_ID)
+        if guild:
+            channel = guild.get_channel(CHANNEL_ID)
+            if channel:
+                date = datetime.date.today() + datetime.timedelta(weeks=3)
+                date_str = date.strftime("%Y-%m-%d")
+
+                embed = discord.Embed(
+                    title=f"📅 {date_str} の予定調整",
+                    description="以下のボタンから出欠を入力してください。",
+                    color=0x2ECC71,
+                )
+                embed.set_footer(text="自動生成されたスケジュール投票です。")
+
+                await channel.send(embed=embed, view=VoteView(date_str))
+                print(f"[AUTO] {date_str} の投票を作成しました。")
+
 @bot.event
 async def on_ready():
-    print(f"✅ Logged in as {bot.user}")
-    try:
-        await tree.sync()
-        print("✅ Slash commands synced!")
-    except Exception as e:
-        print(f"❌ Sync error: {e}")
+    await tree.sync()
+    auto_schedule_task.start()
+    print(f"✅ Bot {bot.user} がログインしました！")
+    print("✅ Slash commands synced!")
+    print("✅ 自動スケジュールタスク開始！")
 
-# トークンで起動
-TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-if not TOKEN:
-    raise ValueError("⚠️ DISCORD_BOT_TOKEN が設定されていません。Renderの環境変数を確認してください。")
-
+# ====== 実行 ======
 bot.run(TOKEN)
