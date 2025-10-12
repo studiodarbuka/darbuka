@@ -69,7 +69,7 @@ async def on_ready():
     print(f"✅ ログイン完了: {bot.user}")
 
     # テスト：日本時間 2025/10/12 12:20 に一度だけ投稿
-    target_time_jst = datetime.datetime(2025, 10, 12, 12, 20)
+    target_time_jst = datetime.datetime(2025, 10, 12, 12, 25)
     # RenderはUTCなので、JST→UTC変換（-9時間）
     target_time_utc = target_time_jst - datetime.timedelta(hours=9)
 
