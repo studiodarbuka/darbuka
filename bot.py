@@ -1,118 +1,94 @@
 import discord
 from discord import app_commands
 from discord.ext import tasks
-import datetime
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import asyncio
+import datetime
 import os
 
-# ====== 設定 ======
-TOKEN = os.getenv("DISCORD_BOT_TOKEN")  # Render の環境変数で設定
-GUILD_ID = int(os.getenv("DISCORD_GUILD_ID", 0))  # サーバーID（任意）
-CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", 0))  # 投票を送るチャンネルID（任意）
-
-# ====== Bot初期化 ======
 intents = discord.Intents.default()
-intents.message_content = True  # メッセージ内容を扱う場合のみ必要
+intents.message_content = True
 bot = discord.Client(intents=intents)
 tree = app_commands.CommandTree(bot)
+scheduler = AsyncIOScheduler()
 
-# ====== 投票データ ======
-vote_data = {}  # {date_str: {"votes": {"user": "option"}}}
+# 投稿したいチャンネルIDを設定（実際の値に変更して！）
+CHANNEL_ID = 123456789012345678  # ← あなたのDiscordチャンネルIDに書き換え
 
-# ====== 投票UI ======
-class VoteView(discord.ui.View):
-    def __init__(self, date_str):
-        super().__init__(timeout=None)
-        self.date_str = date_str
+# ========================
+# 予定表を送る関数
+# ========================
+async def send_schedule_message():
+    """予定表を自動投稿する"""
+    try:
+        channel = bot.get_channel(CHANNEL_ID)
+        if not channel:
+            print("⚠️ チャンネルが見つかりません。CHANNEL_IDを確認してください。")
+            return
 
-    @discord.ui.button(label="参加", style=discord.ButtonStyle.green)
-    async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
-        user = interaction.user.name
-        vote_data.setdefault(self.date_str, {"votes": {}})
-        vote_data[self.date_str]["votes"][user] = "参加"
-        await interaction.response.send_message(f"{user} さんが『参加』に投票しました。", ephemeral=True)
+        today = datetime.date.today()
+        target_date = today + datetime.timedelta(weeks=3)
+        embed = discord.Embed(
+            title=f"📅 {target_date.strftime('%m/%d')}週の予定調整",
+            description="以下の候補日から投票してください！",
+            color=discord.Color.blue(),
+        )
 
-    @discord.ui.button(label="未定", style=discord.ButtonStyle.gray)
-    async def maybe(self, interaction: discord.Interaction, button: discord.ui.Button):
-        user = interaction.user.name
-        vote_data.setdefault(self.date_str, {"votes": {}})
-        vote_data[self.date_str]["votes"][user] = "未定"
-        await interaction.response.send_message(f"{user} さんが『未定』に投票しました。", ephemeral=True)
+        # 例：3日分の候補を出す
+        for i in range(3):
+            date = target_date + datetime.timedelta(days=i)
+            embed.add_field(
+                name=date.strftime("%m/%d (%a)"),
+                value="✅ 参加\n❌ 不可",
+                inline=False
+            )
 
-    @discord.ui.button(label="不参加", style=discord.ButtonStyle.red)
-    async def decline(self, interaction: discord.Interaction, button: discord.ui.Button):
-        user = interaction.user.name
-        vote_data.setdefault(self.date_str, {"votes": {}})
-        vote_data[self.date_str]["votes"][user] = "不参加"
-        await interaction.response.send_message(f"{user} さんが『不参加』に投票しました。", ephemeral=True)
+        await channel.send(embed=embed)
+        print(f"✅ {target_date.strftime('%m/%d')} の予定表を投稿しました！")
 
-# ====== /schedule コマンド ======
-@tree.command(name="schedule", description="3週間後の日程投票を開始します")
-async def schedule(interaction: discord.Interaction):
-    await interaction.response.send_message("3週間後の日程を作成します...", ephemeral=True)
+    except Exception as e:
+        print(f"❌ エラー: {e}")
 
-    date = datetime.date.today() + datetime.timedelta(weeks=3)
-    date_str = date.strftime("%Y-%m-%d")
 
-    embed = discord.Embed(
-        title=f"📅 {date_str} の予定調整",
-        description="以下のボタンから出欠を入力してください。",
-        color=0x2ECC71,
-    )
-    embed.set_footer(text="自動生成されたスケジュール投票です。")
+# ========================
+# コマンド登録 (/schedule)
+# ========================
+@tree.command(name="schedule", description="3週間後の予定調整を投稿します。")
+async def schedule_command(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    await send_schedule_message()
+    await interaction.followup.send("✅ 予定表を投稿しました！", ephemeral=True)
 
-    channel = interaction.guild.get_channel(CHANNEL_ID)
-    if channel:
-        await channel.send(embed=embed, view=VoteView(date_str))
-        await interaction.followup.send(f"{channel.mention} に投票を作成しました！", ephemeral=True)
-    else:
-        await interaction.followup.send("チャンネルが見つかりません。CHANNEL_IDを確認してください。", ephemeral=True)
 
-# ====== /event_now コマンド ======
-@tree.command(name="event_now", description="現在の投票状況を確認します")
-async def event_now(interaction: discord.Interaction):
-    if not vote_data:
-        await interaction.response.send_message("まだ投票がありません。", ephemeral=True)
-        return
-
-    message = ""
-    for date, data in vote_data.items():
-        message += f"**{date} の投票状況：**\n"
-        for user, choice in data["votes"].items():
-            message += f"・{user} → {choice}\n"
-        message += "\n"
-
-    await interaction.response.send_message(message, ephemeral=True)
-
-# ====== 自動タスク ======
-@tasks.loop(hours=24)
-async def auto_schedule_task():
-    now = datetime.datetime.now()
-    if now.weekday() == 6 and now.hour == 9:  # 日曜の9時に実行
-        guild = bot.get_guild(GUILD_ID)
-        if guild:
-            channel = guild.get_channel(CHANNEL_ID)
-            if channel:
-                date = datetime.date.today() + datetime.timedelta(weeks=3)
-                date_str = date.strftime("%Y-%m-%d")
-
-                embed = discord.Embed(
-                    title=f"📅 {date_str} の予定調整",
-                    description="以下のボタンから出欠を入力してください。",
-                    color=0x2ECC71,
-                )
-                embed.set_footer(text="自動生成されたスケジュール投票です。")
-
-                await channel.send(embed=embed, view=VoteView(date_str))
-                print(f"[AUTO] {date_str} の投票を作成しました。")
-
+# ========================
+# Bot起動時
+# ========================
 @bot.event
 async def on_ready():
     await tree.sync()
-    auto_schedule_task.start()
-    print(f"✅ Bot {bot.user} がログインしました！")
-    print("✅ Slash commands synced!")
-    print("✅ 自動スケジュールタスク開始！")
+    print(f"✅ ログイン完了: {bot.user}")
 
-# ====== 実行 ======
+    # テスト：日本時間 2025/10/12 12:20 に一度だけ投稿
+    target_time_jst = datetime.datetime(2025, 10, 12, 12, 20)
+    # RenderはUTCなので、JST→UTC変換（-9時間）
+    target_time_utc = target_time_jst - datetime.timedelta(hours=9)
+
+    now = datetime.datetime.utcnow()
+    if now < target_time_utc:
+        scheduler.add_job(
+            send_schedule_message,
+            "date",
+            run_date=target_time_utc,
+            id="test_schedule"
+        )
+        scheduler.start()
+        print(f"⏰ テストジョブを登録しました（JST {target_time_jst} に実行予定）")
+    else:
+        print("⚠️ すでに過ぎた時刻です。target_timeを更新してください。")
+
+
+# ========================
+# 起動
+# ========================
+TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 bot.run(TOKEN)
