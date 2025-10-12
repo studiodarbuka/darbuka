@@ -4,7 +4,6 @@ import datetime
 import os
 import asyncio
 import json
-import pytz
 
 # -----------------------------
 # 初期設定
@@ -15,9 +14,9 @@ bot = discord.Client(intents=intents)
 tree = app_commands.CommandTree(bot)
 
 # -----------------------------
-# 永続化ディレクトリ
+# 永続ディスク設定（Render有料版向け）
 # -----------------------------
-PERSISTENT_DIR = "/data/schedulebot"
+PERSISTENT_DIR = "/data/darbuka_bot"
 os.makedirs(PERSISTENT_DIR, exist_ok=True)
 VOTE_FILE = os.path.join(PERSISTENT_DIR, "vote_data.json")
 REMINDER_FILE = os.path.join(PERSISTENT_DIR, "reminders.json")
@@ -44,7 +43,7 @@ async def load_json(file, default):
         return await asyncio.to_thread(lambda: json.load(open(file, "r", encoding="utf-8")))
 
 # -----------------------------
-# 起動時データ読み込み
+# 起動時のデータ読み込み
 # -----------------------------
 vote_data = asyncio.run(load_json(VOTE_FILE, {}))
 scheduled_weeks = asyncio.run(load_json(REMINDER_FILE, {"scheduled": []}))["scheduled"]
@@ -66,34 +65,33 @@ class VoteView(discord.ui.View):
         if self.date_str not in vote_data[message_id]:
             vote_data[message_id][self.date_str] = {"参加(🟢)": [], "調整可(🟡)": [], "不可(🔴)": []}
 
-        # 他の選択肢から削除
         for k in vote_data[message_id][self.date_str]:
             if user_id in vote_data[message_id][self.date_str][k]:
                 vote_data[message_id][self.date_str][k].remove(user_id)
 
-        # 新しい選択肢に追加
         vote_data[message_id][self.date_str][status].append(user_id)
         await save_json(VOTE_FILE, vote_data)
 
-        # Embed更新
         def ids_to_display(ids):
             names = []
             for uid in ids:
                 member = interaction.guild.get_member(int(uid))
-                names.append(member.display_name if member else f"<@{uid}>")
-            return "\n".join(names) if names else "なし"
+                if member:
+                    names.append(member.display_name)
+                else:
+                    names.append(f"<@{uid}>")
+            return ", ".join(names) if names else "-"
 
         embed = interaction.message.embeds[0]
         for idx, k in enumerate(["参加(🟢)", "調整可(🟡)", "不可(🔴)"]):
-            embed.set_field_at(idx, name=k, value=ids_to_display(vote_data[message_id][self.date_str][k]), inline=False)
+            users = vote_data[message_id][self.date_str][k]
+            embed.set_field_at(idx, name=k, value=ids_to_display(users), inline=False)
 
         await interaction.response.edit_message(embed=embed, view=self)
 
-        # 参加3人以上で確定通知
         if len(vote_data[message_id][self.date_str]["参加(🟢)"]) >= 3:
             await interaction.channel.send(f"✅ {self.date_str} は3人以上が参加予定！日程確定です！")
 
-    # ボタン
     @discord.ui.button(label="参加(🟢)", style=discord.ButtonStyle.green)
     async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.register_vote(interaction, "参加(🟢)")
@@ -112,8 +110,7 @@ class VoteView(discord.ui.View):
 @tree.command(name="schedule", description="日程調整を開始します")
 async def schedule(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
-    tz = pytz.timezone("Asia/Tokyo")
-    today = datetime.datetime.now(tz).date()
+    today = datetime.date.today()
     target = today + datetime.timedelta(weeks=3)
     days_to_sunday = (6 - target.weekday()) % 7
     start_date = target + datetime.timedelta(days=days_to_sunday)
@@ -129,87 +126,58 @@ async def schedule(interaction: discord.Interaction):
     dates = [(start_date + datetime.timedelta(days=i)).strftime("%m/%d(%a)") for i in range(7)]
     for d in dates:
         embed = discord.Embed(title=f"【日程候補】{d}", description="以下のボタンで投票してください")
-        embed.add_field(name="参加(🟢)", value="なし", inline=False)
-        embed.add_field(name="調整可(🟡)", value="なし", inline=False)
-        embed.add_field(name="不可(🔴)", value="なし", inline=False)
-        channel = discord.utils.get(interaction.guild.text_channels, name="日程")
-        if channel:
-            await channel.send(embed=embed, view=VoteView(d))
+        embed.add_field(name="参加(🟢)", value="-", inline=False)
+        embed.add_field(name="調整可(🟡)", value="-", inline=False)
+        embed.add_field(name="不可(🔴)", value="-", inline=False)
+        await interaction.channel.send(embed=embed, view=VoteView(d))
 
     await interaction.followup.send(f"📅 {start_date.strftime('%m/%d(%a)')} からの1週間の日程候補を作成しました！", ephemeral=True)
 
 # -----------------------------
-# /event_now コマンド
-# -----------------------------
-@tree.command(name="event_now", description="突発イベントを作成")
-@app_commands.describe(
-    title="イベント名",
-    description="詳細（任意）",
-    date="投票日程（複数可、カンマ区切り、形式: YYYY-MM-DD）"
-)
-async def event_now(interaction: discord.Interaction, title: str, date: str, description: str = ""):
-    await interaction.response.defer(ephemeral=True)
-    dates = []
-    for d in date.split(","):
-        d_clean = d.strip()
-        parsed = None
-        for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
-            try:
-                parsed = datetime.datetime.strptime(d_clean, fmt).strftime("%m/%d(%a)")
-                break
-            except ValueError:
-                continue
-        if not parsed:
-            await interaction.followup.send(f"⚠️ 日付フォーマットが不正です: {d_clean}", ephemeral=True)
-            return
-        dates.append(parsed)
-
-    for d in dates:
-        embed = discord.Embed(title=f"【突発イベント】{title} - {d}", description=description or "詳細なし")
-        embed.add_field(name="参加(🟢)", value="なし", inline=False)
-        embed.add_field(name="調整可(🟡)", value="なし", inline=False)
-        embed.add_field(name="不可(🔴)", value="なし", inline=False)
-        for guild in bot.guilds:
-            channel = discord.utils.get(guild.text_channels, name="日程")
-            if channel:
-                await channel.send(embed=embed, view=VoteView(d))
-
-    await interaction.followup.send(f"🚨 イベント「{title}」を作成しました！", ephemeral=True)
-
-# -----------------------------
-# 自動スケジュール送信タスク（毎週日曜10時）
+# バックグラウンドタスク（自動リマインド）
 # -----------------------------
 async def scheduler_task():
-    tz = pytz.timezone("Asia/Tokyo")
     await bot.wait_until_ready()
     while not bot.is_closed():
-        now = datetime.datetime.now(tz)
-        if now.weekday() == 6 and now.hour == 10 and now.minute == 0:  # 日曜10:00
-            today = now.date()
-            target = today + datetime.timedelta(weeks=3)
-            days_to_sunday = (6 - target.weekday()) % 7
-            start_date = target + datetime.timedelta(days=days_to_sunday)
+        today = datetime.date.today()
+        for s in scheduled_weeks:
+            start_date = datetime.datetime.strptime(s["start_date"], "%Y-%m-%d").date()
+            channel = None
+            for ch in bot.get_all_channels():
+                if ch.name == s.get("channel_name"):
+                    channel = ch
+                    break
 
-            dates = [(start_date + datetime.timedelta(days=i)).strftime("%m/%d(%a)") for i in range(7)]
-            for guild in bot.guilds:
-                channel = discord.utils.get(guild.text_channels, name="日程")
-                if channel:
-                    for d in dates:
-                        embed = discord.Embed(title=f"【日程候補】{d}", description="以下のボタンで投票してください")
-                        embed.add_field(name="参加(🟢)", value="なし", inline=False)
-                        embed.add_field(name="調整可(🟡)", value="なし", inline=False)
-                        embed.add_field(name="不可(🔴)", value="なし", inline=False)
-                        await channel.send(embed=embed, view=VoteView(d))
+            if not channel:
+                continue
 
-            scheduled_weeks.append({
-                "channel_name": "日程",
-                "start_date": start_date.strftime("%Y-%m-%d"),
-                "reminded_2w": False,
-                "reminded_1w": False
-            })
-            await save_json(REMINDER_FILE, {"scheduled": scheduled_weeks})
-            await asyncio.sleep(60)  # 1分待機して同じ分に再送しない
-        await asyncio.sleep(30)
+            # 2週間前リマインド
+            if not s.get("reminded_2w") and today == start_date - datetime.timedelta(weeks=2):
+                text = "📢 2週間前リマインドです！投票がまだの方はお願いします！\n\n"
+                text += "```固定幅表形式\n"
+                text += f"{'日程':<10}{'参加':<20}{'調整':<20}{'不可':<20}\n"
+
+                # 投票状況をまとめる
+                for msg_id, days in vote_data.items():
+                    for date, status in days.items():
+                        text += f"{date:<10}"
+                        for col in ["参加(🟢)", "調整可(🟡)", "不可(🔴)"]:
+                            users = []
+                            for uid in status.get(col, []):
+                                users.append(f"<@{uid}>")
+                            text += f"{', '.join(users) or '-':<20}"
+                        text += "\n"
+                text += "```"
+                await channel.send(text)
+                s["reminded_2w"] = True
+
+            # 1週間前リマインド（簡易通知）
+            if not s.get("reminded_1w") and today == start_date - datetime.timedelta(weeks=1):
+                await channel.send("📅 1週間前確認です！まだ未投票の方はお願いします！")
+                s["reminded_1w"] = True
+
+        await save_json(REMINDER_FILE, {"scheduled": scheduled_weeks})
+        await asyncio.sleep(60 * 60)  # 1時間ごとにチェック
 
 # -----------------------------
 # Bot起動
