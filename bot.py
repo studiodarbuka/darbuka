@@ -1,8 +1,8 @@
 import discord
 from discord import app_commands
-import datetime
 import os
 import asyncio
+import datetime
 import json
 
 # -----------------------------
@@ -14,13 +14,13 @@ bot = discord.Client(intents=intents)
 tree = app_commands.CommandTree(bot)
 
 # -----------------------------
-# 永続ディスク設定（Render有料版向け）
+# 永続ディスク設定（Render有料版）
 # -----------------------------
-PERSISTENT_DIR = "/data"
+PERSISTENT_DIR = "/data/testbot"  # テストBot用永続ディスク
 os.makedirs(PERSISTENT_DIR, exist_ok=True)
 VOTE_FILE = os.path.join(PERSISTENT_DIR, "vote_data.json")
 
-file_lock = asyncio.Lock()
+file_lock = asyncio.Lock()  # 同時アクセス用ロック
 
 # -----------------------------
 # データ永続化関数
@@ -47,7 +47,7 @@ async def load_json(file, default):
 vote_data = asyncio.run(load_json(VOTE_FILE, {}))
 
 # -----------------------------
-# VoteView（ボタン）
+# VoteView
 # -----------------------------
 class VoteView(discord.ui.View):
     def __init__(self, date_str):
@@ -68,6 +68,7 @@ class VoteView(discord.ui.View):
             if user_id in vote_data[message_id][self.date_str][k]:
                 vote_data[message_id][self.date_str][k].remove(user_id)
 
+        # 新しい選択肢に追加
         vote_data[message_id][self.date_str][status].append(user_id)
         await save_json(VOTE_FILE, vote_data)
 
@@ -102,65 +103,53 @@ class VoteView(discord.ui.View):
         await self.register_vote(interaction, "不可(🔴)")
 
 # -----------------------------
-# テスト用チャンネル登録コマンド
+# /event_now コマンド（手動作成用）
 # -----------------------------
-test_channel = None
+@tree.command(name="event_now", description="突発イベントを作成（テスト用）")
+@app_commands.describe(
+    title="イベント名",
+    date="投票日程（カンマ区切り、形式: YYYY-MM-DD）",
+    description="詳細（任意）"
+)
+async def event_now(interaction: discord.Interaction, title: str, date: str, description: str = ""):
+    await interaction.response.defer(ephemeral=True)
+    dates = []
+    for d in date.split(","):
+        try:
+            parsed = datetime.datetime.strptime(d.strip(), "%Y-%m-%d").strftime("%m/%d(%a)")
+            dates.append(parsed)
+        except ValueError:
+            await interaction.followup.send(f"⚠️ 日付フォーマット不正: {d}", ephemeral=True)
+            return
 
-@tree.command(name="set_test_channel", description="このチャンネルを自動テスト送信先に設定")
-async def set_test_channel(interaction: discord.Interaction):
-    global test_channel
-    test_channel = interaction.channel
-    await interaction.response.send_message("✅ このチャンネルをテスト送信先に設定しました。", ephemeral=True)
+    for d in dates:
+        embed = discord.Embed(title=f"【突発イベント】{title} - {d}", description=description or "詳細なし")
+        embed.add_field(name="参加(🟢)", value="なし", inline=False)
+        embed.add_field(name="調整可(🟡)", value="なし", inline=False)
+        embed.add_field(name="不可(🔴)", value="なし", inline=False)
+        await interaction.channel.send(embed=embed, view=VoteView(d))
+
+    await interaction.followup.send(f"🚨 イベント「{title}」を作成しました！", ephemeral=True)
 
 # -----------------------------
-# 自動スケジュールタスク（毎日13:30）
+# バックグラウンドタスク（毎日14:40に自動作成）
 # -----------------------------
-async def auto_schedule_task():
+async def scheduler_task():
     await bot.wait_until_ready()
-    global test_channel
+    TEST_CHANNEL_ID = int(os.getenv("TEST_CHANNEL_ID"))
+    channel = bot.get_channel(TEST_CHANNEL_ID)
+    if not channel:
+        print("⚠️ TEST_CHANNEL_ID のチャンネルが見つかりません")
+        return
+
     while not bot.is_closed():
-        if test_channel is None:
-            print("⚠️ テスト送信先チャンネルが未設定")
-            await asyncio.sleep(60)
-            continue
-
         now = datetime.datetime.now()
-        target = now.replace(hour=13, minute=30, second=0, microsecond=0)
-        if now >= target:
-            target += datetime.timedelta(days=1)
-        wait_seconds = (target - now).total_seconds()
-        await asyncio.sleep(wait_seconds)
-
-        # 7日分自動送信
-        today = datetime.date.today()
-        for i in range(7):
-            d = (today + datetime.timedelta(days=i)).strftime("%m/%d(%a)")
-            embed = discord.Embed(title=f"【自動スケジュール】{d}", description="簡易テスト用")
+        # 14:40になったら実行
+        if now.hour == 14 and now.minute == 40:
+            date_str = now.strftime("%m/%d(%a)")
+            embed = discord.Embed(title=f"【自動テストイベント】{date_str}", description="テスト用イベント")
             embed.add_field(name="参加(🟢)", value="なし", inline=False)
             embed.add_field(name="調整可(🟡)", value="なし", inline=False)
             embed.add_field(name="不可(🔴)", value="なし", inline=False)
-            await test_channel.send(embed=embed, view=VoteView(d))
-        print("✅ 自動スケジュール送信完了")
-
-# -----------------------------
-# Bot起動
-# -----------------------------
-@bot.event
-async def on_ready():
-    print(f"✅ Logged in as {bot.user}")
-    try:
-        await tree.sync()
-        print("✅ Slash commands synced!")
-    except Exception as e:
-        print(f"❌ Sync error: {e}")
-    bot.loop.create_task(auto_schedule_task())
-    print("⏰ Auto schedule task started")
-
-# -----------------------------
-# 実行
-# -----------------------------
-TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-if not TOKEN:
-    raise ValueError("⚠️ DISCORD_BOT_TOKEN が設定されていません。")
-
-bot.run(TOKEN)
+            await channel.send(embed=embed, view=VoteView(date_str))
+            #
