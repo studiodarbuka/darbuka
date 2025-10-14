@@ -13,18 +13,18 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# 永続化ディレクトリ（Render Starter対応）
+# ===== Render対応 永続化ディレクトリ =====
 PERSISTENT_DIR = "/opt/render/project/src/data"
 os.makedirs(PERSISTENT_DIR, exist_ok=True)
 VOTE_FILE = os.path.join(PERSISTENT_DIR, "votes.json")
 
-# タイムゾーン
+# ===== タイムゾーン =====
 JST = pytz.timezone("Asia/Tokyo")
 
-# 投票データ（メモリ）
+# ===== 投票データ =====
 vote_data = {}
 
-# ====== ユーティリティ ======
+# ===== ユーティリティ =====
 def load_votes():
     global vote_data
     if os.path.exists(VOTE_FILE):
@@ -61,9 +61,9 @@ def generate_table():
     table += "```"
     return table
 
-
-# ====== 自動投稿・通知処理 ======
+# ===== 投稿処理 =====
 async def send_schedule():
+    await bot.wait_until_ready()
     channel = discord.utils.get(bot.get_all_channels(), name="日程")
     if not channel:
         print("⚠️ チャンネル「日程」が見つかりません。")
@@ -83,50 +83,46 @@ async def send_schedule():
         await sent.add_reaction(emoji)
     print("✅ 三週間後の予定を投稿しました。")
 
-
 async def send_reminder():
+    await bot.wait_until_ready()
     channel = discord.utils.get(bot.get_all_channels(), name="投票催促")
     if not channel:
         print("⚠️ チャンネル「投票催促」が見つかりません。")
         return
 
     msg = "⏰ **2週間前になりました！投票をお願いします！**"
-    table = generate_table()
     await channel.send(msg)
-    await channel.send(table)
+    await channel.send(generate_table())
     print("✅ 2週間前の催促を送信しました。")
 
-
 async def send_final_reminder():
+    await bot.wait_until_ready()
     channel = discord.utils.get(bot.get_all_channels(), name="投票催促")
     if not channel:
         print("⚠️ チャンネル「投票催促」が見つかりません。")
         return
 
     msg = "⚠️ **1週間前です！未投票の方は至急お願いします！**"
-    table = generate_table()
     await channel.send(msg)
-    await channel.send(table)
+    await channel.send(generate_table())
     print("✅ 1週間前の最終催促を送信しました。")
 
-
-# ====== スケジューラー設定 ======
+# ===== スケジューラー =====
 scheduler = AsyncIOScheduler(timezone=JST)
-scheduler.add_job(send_schedule, CronTrigger(day_of_week="sun", hour=10, minute=0))   # 日曜10時
-scheduler.add_job(send_reminder, CronTrigger(day_of_week="sun", hour=10, minute=0, week="*/1"))  # 2週間前想定
-scheduler.add_job(send_final_reminder, CronTrigger(day_of_week="sun", hour=10, minute=0, week="*/2"))  # 1週間前想定
+scheduler.add_job(send_schedule, CronTrigger(day_of_week="sun", hour=10, minute=0))
+scheduler.add_job(send_reminder, CronTrigger(day_of_week="sun", hour=10, minute=0, week="*/1"))
+scheduler.add_job(send_final_reminder, CronTrigger(day_of_week="sun", hour=10, minute=0, week="*/2"))
 
-
-# ====== 起動時処理 ======
+# ===== 起動時 =====
 @bot.event
 async def on_ready():
     load_votes()
-    scheduler.start()
+    if not scheduler.running:
+        scheduler.start()
     print(f"✅ Logged in as {bot.user}")
     print("✅ Scheduler started.")
 
-
-# ====== 投票リアクション管理 ======
+# ===== 投票リアクション =====
 @bot.event
 async def on_reaction_add(reaction, user):
     if user.bot:
@@ -146,8 +142,7 @@ async def on_reaction_add(reaction, user):
             save_votes()
             break
 
-
-# ===== メイン起動 =====
+# ===== メイン =====
 if __name__ == "__main__":
     token = os.getenv("DISCORD_BOT_TOKEN")
     if not token:
