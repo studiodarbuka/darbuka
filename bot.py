@@ -132,7 +132,7 @@ scheduler = AsyncIOScheduler(timezone=JST)
 scheduler.add_job(send_week_schedule, CronTrigger(day_of_week="sun", hour=10, minute=0))
 # Step2: テスト用に今日15:40に送信
 now = datetime.datetime.now(JST)
-test_time = now.replace(hour=15, minute=40, second=0, microsecond=0)
+test_time = now.replace(hour=15, minute=50, second=0, microsecond=0)
 if test_time < now:
     test_time = now + datetime.timedelta(minutes=1)
 scheduler.add_job(remind_2weeks, DateTrigger(test_time))
