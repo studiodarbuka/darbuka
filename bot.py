@@ -1,43 +1,45 @@
 import os
 import discord
-from discord.ext import commands
 from discord import app_commands
+from discord.ext import commands
 import asyncio
 import datetime
 import pytz
 import json
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
+from apscheduler.triggers.cron import CronTrigger
 
-# ===== 基本設定 =====
+# ====== 基本設定 ======
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
-tree = bot.tree  # commands.BotはすでにCommandTreeを持つので再作成不要
+tree = bot.tree  # すでに commands.Bot には CommandTree があるので再生成しない
 
-# ===== 永続保存 =====
+# ====== 永続保存設定 ======
 PERSISTENT_DIR = "/opt/render/project/src/data"
 os.makedirs(PERSISTENT_DIR, exist_ok=True)
 VOTE_FILE = os.path.join(PERSISTENT_DIR, "votes.json")
 
-# ===== タイムゾーン =====
+# ====== タイムゾーン ======
 JST = pytz.timezone("Asia/Tokyo")
 
-# ===== 投票データ =====
+# ====== 投票データ ======
+vote_data = {}
+
 def load_votes():
+    global vote_data
     if os.path.exists(VOTE_FILE):
         with open(VOTE_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
+            vote_data = json.load(f)
+    else:
+        vote_data = {}
 
-def save_votes(vote_data):
+def save_votes():
     with open(VOTE_FILE, "w", encoding="utf-8") as f:
         json.dump(vote_data, f, ensure_ascii=False, indent=2)
 
-vote_data = load_votes()
-
-# ===== ユーティリティ =====
+# ====== スケジュール生成 ======
 def get_schedule_start():
     """3週間後の日曜を取得"""
     today = datetime.datetime.now(JST)
@@ -49,8 +51,9 @@ def generate_week_schedule():
     start = get_schedule_start()
     return [(start + datetime.timedelta(days=i)).strftime("%Y-%m-%d (%a)") for i in range(7)]
 
-def generate_vote_table(vote_data):
-    table = "📊 **投票状況**\n```\n日程           | 参加 | 調整 | 不可\n"
+def generate_table():
+    table = "📊 **投票状況**\n"
+    table += "```\n日程           | 参加 | 調整 | 不可\n"
     table += "--------------------------------\n"
     for date, votes in vote_data.items():
         s = sum(1 for v in votes.values() if v == "参加")
@@ -60,8 +63,8 @@ def generate_vote_table(vote_data):
     table += "```"
     return table
 
-# ===== Step1: 毎週日曜 10:00に日程投稿 =====
-async def send_week_schedule():
+# ====== メッセージ送信 ======
+async def send_step1_schedule():
     await bot.wait_until_ready()
     channel = discord.utils.get(bot.get_all_channels(), name="wqwq")
     if not channel:
@@ -71,29 +74,46 @@ async def send_week_schedule():
     week = generate_week_schedule()
     global vote_data
     vote_data = {date: {} for date in week}
-    save_votes(vote_data)
+    save_votes()
 
-    msg = "📅 **三週間後の予定（投票開始）**\n\n" + "\n".join([f"・{d}" for d in week])
+    msg = "📅 **三週間後の予定（投票開始）**\n"
+    msg += "\n".join([f"・{d}" for d in week])
     msg += "\n\nリアクションで投票してください！\n✅ = 参加 / 🤔 = 調整 / ❌ = 不可"
 
     sent = await channel.send(msg)
     for emoji in ["✅", "🤔", "❌"]:
         await sent.add_reaction(emoji)
-    print("✅ 週間日程投稿完了")
+    print("✅ Step1: 三週間前スケジュール投稿完了。")
 
-# ===== Step2: 2週間前リマインド（テキスト表） =====
-async def remind_2weeks():
+async def send_step2_remind():
     await bot.wait_until_ready()
-    channel = discord.utils.get(bot.get_all_channels(), name="wqwq")
+    channel = discord.utils.get(bot.get_all_channels(), name="日程")
     if not channel:
-        print("⚠️ チャンネル「wqwq」が見つかりません。")
+        print("⚠️ チャンネル「日程」が見つかりません。")
         return
 
-    msg = "⏰ **2週間前リマインドです！投票状況を確認してください**\n\n"
-    await channel.send(msg + generate_vote_table(vote_data))
-    print("✅ 2週間前リマインド送信完了")
+    msg = "⏰ **2週間前になりました！投票をお願いします！**"
+    await channel.send(msg)
+    await channel.send(generate_table())
+    print("✅ Step2: 2週間前リマインド送信完了。")
 
-# ===== リアクション処理 =====
+# ====== Slash コマンド ======
+@tree.command(name="schedule", description="手動で日程投票を開始します。")
+async def schedule(interaction: discord.Interaction):
+    await interaction.response.send_message("📅 手動で日程投票を開始します。", ephemeral=True)
+    await send_step1_schedule()
+
+@tree.command(name="event_now", description="突発イベントをすぐ通知します。")
+async def event_now(interaction: discord.Interaction, 内容: str):
+    channel = discord.utils.get(interaction.guild.channels, name="突発イベント")
+    if not channel:
+        await interaction.response.send_message("⚠️ チャンネル「突発イベント」が見つかりません。", ephemeral=True)
+        return
+    msg = f"🚨 **突発イベント発生！**\n{内容}"
+    await channel.send(msg)
+    await interaction.response.send_message("✅ 突発イベントを送信しました！", ephemeral=True)
+
+# ====== リアクション処理 ======
 @bot.event
 async def on_reaction_add(reaction, user):
     if user.bot:
@@ -107,38 +127,36 @@ async def on_reaction_add(reaction, user):
     for date in vote_data.keys():
         if date in msg.content:
             vote_data[date][str(user)] = emoji_map[reaction.emoji]
-            save_votes(vote_data)
+            save_votes()
             break
 
-# ===== /Remind コマンド（手動テスト用） =====
-@tree.command(name="remind", description="2週間前リマインドを手動で送信")
-async def remind_command(interaction: discord.Interaction):
-    await interaction.response.send_message("⏰ リマインド送信中...", ephemeral=True)
-    await remind_2weeks()
+# ====== on_ready ======
+scheduler = AsyncIOScheduler(timezone=JST)
 
-# ===== 起動時 =====
 @bot.event
 async def on_ready():
-    print(f"✅ Logged in as {bot.user}")
+    load_votes()
     try:
         await tree.sync()
         print("✅ Slash Commands synced!")
     except Exception as e:
         print(f"⚠️ コマンド同期エラー: {e}")
 
-# ===== スケジューラー設定 =====
-scheduler = AsyncIOScheduler(timezone=JST)
-# 毎週日曜 10:00に送信
-scheduler.add_job(send_week_schedule, CronTrigger(day_of_week="sun", hour=10, minute=0))
-# Step2: テスト用に今日15:40に送信
-now = datetime.datetime.now(JST)
-test_time = now.replace(hour=15, minute=50, second=0, microsecond=0)
-if test_time < now:
-    test_time = now + datetime.timedelta(minutes=1)
-scheduler.add_job(remind_2weeks, DateTrigger(test_time))
-scheduler.start()
+    # Step1: 毎週日曜 10:00 JST に自動投稿
+    scheduler.add_job(send_step1_schedule, CronTrigger(day_of_week="sun", hour=10, minute=0))
 
-# ===== メイン =====
+    # Step2: テスト用に今日 15:50 に送信
+    now = datetime.datetime.now(JST)
+    test_time = now.replace(hour=15, minute=50, second=0, microsecond=0)
+    if test_time < now:
+        test_time += datetime.timedelta(days=0)  # 過ぎていれば今日再送信
+    scheduler.add_job(send_step2_remind, DateTrigger(run_date=test_time))
+
+    scheduler.start()
+    print(f"✅ Logged in as {bot.user}")
+    print("✅ Scheduler started.")
+
+# ====== メイン ======
 if __name__ == "__main__":
     token = os.getenv("DISCORD_BOT_TOKEN")
     if not token:
