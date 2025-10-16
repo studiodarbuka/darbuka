@@ -70,7 +70,7 @@ class VoteView(discord.ui.View):
 
     async def register_vote(self, interaction: discord.Interaction, status: str):
         message_id = interaction.message.id
-        user = interaction.user.display_name
+        user_name = interaction.user.display_name
 
         if message_id not in vote_data:
             vote_data[message_id] = {}
@@ -79,15 +79,15 @@ class VoteView(discord.ui.View):
 
         # 他の選択肢から削除して新しい方に追加
         for k in vote_data[message_id][self.date_str]:
-            if user in vote_data[message_id][self.date_str][k]:
-                vote_data[message_id][self.date_str][k].remove(user)
-        vote_data[message_id][self.date_str][status].append(user)
+            if user_name in vote_data[message_id][self.date_str][k]:
+                vote_data[message_id][self.date_str][k].remove(user_name)
+        vote_data[message_id][self.date_str][status].append(user_name)
         save_votes()
 
-        # Embed更新
+        # Embed更新（人数をフィールド名に表示）
         embed = discord.Embed(title=f"【予定候補】{self.date_str}")
         for k, v in vote_data[message_id][self.date_str].items():
-            embed.add_field(name=k, value="\n".join(v) if v else "なし", inline=False)
+            embed.add_field(name=f"{k} ({len(v)}人)", value="\n".join(v) if v else "0人", inline=False)
 
         await interaction.response.edit_message(embed=embed, view=self)
 
@@ -101,9 +101,26 @@ async def send_step1_schedule():
 
     week = generate_week_schedule()
     for date in week:
-        embed = discord.Embed(title=f"📅 三週間後の予定（投票開始） {date}")
+        # 初期投票データを作成して保存
+        embed_title = f"📅 三週間後の予定（投票開始） {date}"
+        message_id_placeholder = f"tmp-{date}"  # 仮ID
+        vote_data[message_id_placeholder] = {
+            date: {"参加(🟢)": [], "調整可(🟡)": [], "不可(🔴)": []}
+        }
+        save_votes()
+
+        # Embed作成（人数を表示）
+        embed = discord.Embed(title=embed_title)
+        for k, v in vote_data[message_id_placeholder][date].items():
+            embed.add_field(name=f"{k} ({len(v)}人)", value="\n".join(v) if v else "0人", inline=False)
+
         view = VoteView(date)
-        await channel.send(embed=embed, view=view)
+        msg = await channel.send(embed=embed, view=view)
+
+        # message.id に合わせて vote_data を更新
+        vote_data[msg.id] = vote_data.pop(message_id_placeholder)
+        save_votes()
+
     print("✅ Step1: 三週間前スケジュール投稿完了。")
 
 async def send_step2_remind():
@@ -113,16 +130,21 @@ async def send_step2_remind():
         print("⚠️ チャンネル「日程」が見つかりません。")
         return
 
-    msg = "⏰ **2週間前になりました！投票をお願いします！**"
-    await channel.send(msg)
+    # ヘッダー
+    header = "⏰ **2週間前になりました！投票をお願いします！**\n以下、現状の投票状況です：\n"
+    all_lines = [header]
 
-    # 投票状況一覧
+    # 投票状況をまとめてテキスト形式で作成
     for message_id, dates in vote_data.items():
         for date_str, votes in dates.items():
-            embed = discord.Embed(title=f"【投票状況】{date_str}")
-            for k, v in votes.items():
-                embed.add_field(name=k, value="\n".join(v) if v else "なし", inline=False)
-            await channel.send(embed=embed)
+            all_lines.append(f"📅 {date_str}")
+            for status, users in votes.items():
+                all_lines.append(f"- {status} ({len(users)}人): " + (", ".join(users) if users else "なし"))
+            all_lines.append("")  # 日付ごとに空行
+
+    text_msg = "```\n" + "\n".join(all_lines) + "\n```"
+    await channel.send(text_msg)
+
     print("✅ Step2: 2週間前リマインド送信完了。")
 
 # ====== on_ready ======
