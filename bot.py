@@ -12,11 +12,11 @@ from apscheduler.triggers.date import DateTrigger
 # ====== 基本設定 ======
 intents = discord.Intents.default()
 intents.message_content = True
-intents.members = True  # メンバー情報取得必須
+intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
-# ====== 永続保存設定 ======
+# ====== 永続保存 ======
 PERSISTENT_DIR = "/opt/render/project/src/data"
 os.makedirs(PERSISTENT_DIR, exist_ok=True)
 VOTE_FILE = os.path.join(PERSISTENT_DIR, "votes.json")
@@ -150,7 +150,7 @@ async def send_step2_remind():
 
     print("✅ Step2: 2週間前リマインド送信完了。")
 
-# ====== Step3: 1週間前未投票者通知 + 日付ごと確定通知 ======
+# ====== Step3: 1週間前未投票者通知 + 確定通知（権限付き） ======
 async def send_step3_confirm():
     await bot.wait_until_ready()
     channel = discord.utils.get(bot.get_all_channels(), name="日程")
@@ -167,31 +167,27 @@ async def send_step3_confirm():
             if not votes:
                 continue
 
-            # --- 未投票者通知 ---
+            # 未投票者取得（権限チェック付き）
             voted_users = set()
             for user_list in votes.values():
                 if isinstance(user_list, list):
                     voted_users.update(user_list)
 
             guild = channel.guild
-            all_members = {m.display_name: m for m in guild.members}
-
             unvoted_mentions = []
-            for user_name, member_obj in all_members.items():
-                if user_name not in voted_users and user_name not in exclude_users:
-                    unvoted_mentions.append(member_obj.mention)
+            for member in guild.members:
+                if (member.display_name not in voted_users and
+                    member.display_name not in exclude_users and
+                    channel.permissions_for(member).send_messages):
+                    unvoted_mentions.append(member.mention)
 
             unvoted_text = ", ".join(unvoted_mentions) if unvoted_mentions else "なし"
             await channel.send(f"📅 {date_str}\n未投票者: {unvoted_text}")
 
-            # --- 参加票数3人以上で確定通知 ---
+            # 参加票3人以上で確定通知
             participants = votes.get("参加(🟢)", [])
             if len(participants) >= 3 and not votes.get("確定通知済み"):
-                member_mentions = []
-                for member in guild.members:
-                    if member.display_name in participants:
-                        member_mentions.append(member.mention)
-
+                member_mentions = [m.mention for m in guild.members if m.display_name in participants]
                 confirm_msg = (
                     f"こんにちは！今週のレッスン日程が決まったよ！\n\n"
                     f"日時：{date_str}\n"
@@ -199,7 +195,6 @@ async def send_step3_confirm():
                     f"メンバー：{' '.join(member_mentions)}\n\n"
                     f"調整ありがとう、当日は遅れずに来てね！"
                 )
-
                 await channel.send(confirm_msg)
                 votes["確定通知済み"] = True
                 save_votes()
@@ -207,7 +202,7 @@ async def send_step3_confirm():
 
     print("✅ Step3: 1週間前未投票者通知＋確定通知完了。")
 
-# ====== /event_now コマンド ======
+# ====== /event_now 突発イベント ======
 @tree.command(name="event_now", description="突発イベントを作成します")
 @app_commands.describe(
     title="イベントのタイトル",
@@ -234,10 +229,9 @@ async def event_now(interaction: discord.Interaction, title: str, date: str, det
     save_votes()
     await interaction.followup.send("✅ 突発イベントを作成しました！", ephemeral=True)
 
-# ====== on_ready ======
+# ====== on_ready + Scheduler ======
 scheduler = AsyncIOScheduler(timezone=JST)
 
-# ====== on_ready ======
 @bot.event
 async def on_ready():
     load_votes()
@@ -248,11 +242,10 @@ async def on_ready():
         print(f"⚠️ コマンド同期エラー: {e}")
 
     now = datetime.datetime.now(JST)
-
-    # 本番用に時間を指定（ここでは例として18:42/18:44/18:46）
-    three_week_test = now.replace(hour=19, minute=2, second=0, microsecond=0)
-    two_week_test = now.replace(hour=19, minute=4, second=0, microsecond=0)
-    one_week_test = now.replace(hour=19, minute=6, second=0, microsecond=0)
+    # 本番用スケジュール
+    three_week_test = now.replace(hour=18, minute=42, second=0, microsecond=0)
+    two_week_test = now.replace(hour=18, minute=44, second=0, microsecond=0)
+    one_week_test = now.replace(hour=18, minute=46, second=0, microsecond=0)
 
     scheduler.add_job(send_step1_schedule, DateTrigger(run_date=three_week_test))
     scheduler.add_job(send_step2_remind, DateTrigger(run_date=two_week_test))
@@ -261,7 +254,6 @@ async def on_ready():
 
     print(f"✅ Logged in as {bot.user}")
     print("✅ Scheduler started.")
-
 
 # ====== メイン ======
 if __name__ == "__main__":
