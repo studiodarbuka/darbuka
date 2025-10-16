@@ -12,6 +12,7 @@ from apscheduler.triggers.date import DateTrigger
 # ====== 基本設定 ======
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True  # メンバー情報取得必須
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
@@ -71,7 +72,7 @@ class VoteView(discord.ui.View):
                 user_current_status = k
                 break
 
-        # 同じボタン押下 → 削除（トグル）
+        # トグル式投票
         if user_current_status == status:
             vote_data[message_id][self.date_str][status].remove(user_name)
         else:
@@ -85,7 +86,8 @@ class VoteView(discord.ui.View):
         # Embed 更新
         embed = discord.Embed(title=f"【予定候補】{self.date_str}")
         for k, v in vote_data[message_id][self.date_str].items():
-            embed.add_field(name=f"{k} ({len(v)}人)", value="\n".join(v) if v else "0人", inline=False)
+            if isinstance(v, list):
+                embed.add_field(name=f"{k} ({len(v)}人)", value="\n".join(v) if v else "0人", inline=False)
 
         await interaction.response.edit_message(embed=embed, view=self)
 
@@ -142,14 +144,15 @@ async def send_step2_remind():
         for date_str, votes in dates.items():
             all_lines.append(f"📅 {date_str}")
             for status, users in votes.items():
-                all_lines.append(f"- {status} ({len(users)}人): " + (", ".join(users) if users else "なし"))
+                if isinstance(users, list):
+                    all_lines.append(f"- {status} ({len(users)}人): " + (", ".join(users) if users else "なし"))
             all_lines.append("")
 
     text_msg = "```\n" + "\n".join(all_lines) + "\n```"
     await channel.send(text_msg)
     print("✅ Step2: 2週間前リマインド送信完了。")
 
-# ====== Step3: 1週間前未投票者通知 ======
+# ====== Step3: 1週間前未投票者通知 + 確定通知 ======
 async def send_step3_confirm():
     await bot.wait_until_ready()
     channel = discord.utils.get(bot.get_all_channels(), name="日程")
@@ -159,8 +162,7 @@ async def send_step3_confirm():
 
     load_votes()
     all_lines = ["⏰ **1週間前リマインド：未投票者確認**\n"]
-
-    exclude_users = [bot.user.display_name, "あなたの表示名"]  # 除外したいユーザー名
+    exclude_users = [bot.user.display_name, "あなたの表示名"]
 
     for message_id, dates in vote_data.items():
         message_id = str(message_id)
@@ -168,9 +170,11 @@ async def send_step3_confirm():
             if not votes:
                 continue
 
+            # --- 未投票者通知 ---
             voted_users = set()
             for user_list in votes.values():
-                voted_users.update(user_list)
+                if isinstance(user_list, list):
+                    voted_users.update(user_list)
 
             guild = channel.guild
             all_members = {m.display_name: m for m in guild.members}
@@ -182,6 +186,27 @@ async def send_step3_confirm():
 
             unvoted_text = ", ".join(unvoted_mentions) if unvoted_mentions else "なし"
             all_lines.append(f"📅 {date_str}\n未投票者: {unvoted_text}\n")
+
+            # --- 参加票数3人以上で確定通知 ---
+            participants = votes.get("参加(🟢)", [])
+            if len(participants) >= 3 and not votes.get("確定通知済み"):
+                member_mentions = []
+                for member in guild.members:
+                    if member.display_name in participants:
+                        member_mentions.append(member.mention)
+
+                confirm_msg = (
+                    f"こんにちは！今週のレッスン日程が決まったよ！\n\n"
+                    f"日時：{date_str}\n"
+                    f"場所：朝霧台駅前 ABLE I 2st\n"
+                    f"メンバー：{' '.join(member_mentions)}\n\n"
+                    f"調整ありがとう、当日は遅れずに来てね！"
+                )
+
+                await channel.send(confirm_msg)
+                votes["確定通知済み"] = True
+                save_votes()
+                print(f"✅ 確定通知送信: {date_str}")
 
     text_msg = "\n".join(all_lines)
     await channel.send(text_msg)
@@ -228,10 +253,10 @@ async def on_ready():
 
     now = datetime.datetime.now(JST)
 
-    # テスト用に時間を設定（適宜変更）
-    three_week_test = now.replace(hour=18, minute=13, second=0, microsecond=0)
-    two_week_test = now.replace(hour=18, minute=15, second=0, microsecond=0)
-    one_week_test = now.replace(hour=18, minute=17, second=0, microsecond=0)
+    # テスト用に時間を設定（秒単位）
+    three_week_test = now.replace(hour=18, minute=42, second=0, microsecond=0)
+    two_week_test = now.replace(hour=18, minute=44, second=0, microsecond=0)
+    one_week_test = now.replace(hour=18, minute=46, second=0, microsecond=0)
 
 
     scheduler.add_job(send_step1_schedule, DateTrigger(run_date=three_week_test))
