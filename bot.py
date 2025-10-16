@@ -77,11 +77,19 @@ class VoteView(discord.ui.View):
         if self.date_str not in vote_data[message_id]:
             vote_data[message_id][self.date_str] = {"参加(🟢)": [], "調整可(🟡)": [], "不可(🔴)": []}
 
-        # 他の選択肢から削除して新しい方に追加
-        for k in vote_data[message_id][self.date_str]:
-            if user_name in vote_data[message_id][self.date_str][k]:
-                vote_data[message_id][self.date_str][k].remove(user_name)
-        vote_data[message_id][self.date_str][status].append(user_name)
+        user_list = vote_data[message_id][self.date_str][status]
+
+        if user_name in user_list:
+            # すでに投票していたら削除（トグルOFF）
+            user_list.remove(user_name)
+        else:
+            # 投票していなければ追加
+            user_list.append(user_name)
+            # 他の選択肢からは削除（1日1選択のみ）
+            for k in vote_data[message_id][self.date_str]:
+                if k != status and user_name in vote_data[message_id][self.date_str][k]:
+                    vote_data[message_id][self.date_str][k].remove(user_name)
+
         save_votes()
 
         # Embed更新（人数をフィールド名に表示）
@@ -161,11 +169,11 @@ async def on_ready():
 
     now = datetime.datetime.now(JST)
     # 三週間前通知テスト
-    three_week_test = now.replace(hour=14, minute=28, second=0, microsecond=0)
+    three_week_test = now.replace(hour=15, minute=08, second=0, microsecond=0)
     scheduler.add_job(send_step1_schedule, DateTrigger(run_date=three_week_test))
 
     # 二週間前リマインドテスト
-    two_week_test = now.replace(hour=14, minute=30, second=0, microsecond=0)
+    two_week_test = now.replace(hour=15, minute=10, second=0, microsecond=0)
     scheduler.add_job(send_step2_remind, DateTrigger(run_date=two_week_test))
 
     scheduler.start()
