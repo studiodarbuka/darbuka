@@ -43,12 +43,13 @@ def save_votes():
 def get_schedule_start():
     today = datetime.datetime.now(JST)
     days_until_sunday = (6 - today.weekday()) % 7
-    target = today + datetime.timedelta(days=days_until_sunday + 14)
+    target = today + datetime.timedelta(days=14 + days_until_sunday)
     return target.replace(hour=0, minute=0, second=0, microsecond=0)
 
-def generate_week_schedule():
-    start = get_schedule_start()
-    return [(start + datetime.timedelta(days=i)).strftime("%Y-%m-%d (%a)") for i in range(7)]
+def generate_week_schedule(start_date=None):
+    if start_date is None:
+        start_date = get_schedule_start()
+    return [(start_date + datetime.timedelta(days=i)).strftime("%Y-%m-%d (%a)") for i in range(7)]
 
 # ====== 投票テーブル作成（名前付き表示） ======
 def generate_table():
@@ -76,19 +77,20 @@ async def send_step1_schedule():
         print("⚠️ チャンネル「wqwq」が見つかりません。")
         return
 
-    week = generate_week_schedule()
+    # 今日基準のテスト用日程
+    today = datetime.datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0)
+    week = generate_week_schedule(start_date=today)
+
     global vote_data
     vote_data = {date: {} for date in week}
     save_votes()
 
-    msg = "📅 **三週間後の予定（投票開始）**\n"
-    msg += "\n".join([f"・{d}" for d in week])
-    msg += "\n\nリアクションで投票してください！\n✅ = 参加 / 🤔 = 調整 / ❌ = 不可"
-
-    sent = await channel.send(msg)
-    for emoji in ["✅", "🤔", "❌"]:
-        await sent.add_reaction(emoji)
-    print("✅ Step1: 三週間前スケジュール投稿完了。")
+    for date in week:
+        msg = f"📅 **三週間後の予定（投票開始）**\n・{date}\n\nリアクションで投票してください！\n✅ = 参加 / 🤔 = 調整 / ❌ = 不可"
+        sent = await channel.send(msg)
+        for emoji in ["✅", "🤔", "❌"]:
+            await sent.add_reaction(emoji)
+    print("✅ Step1: 三週間前スケジュール投稿完了（1日ずつ）")
 
 async def send_step2_remind():
     await bot.wait_until_ready()
@@ -100,9 +102,9 @@ async def send_step2_remind():
     msg = "⏰ **2週間前になりました！投票をお願いします！**"
     await channel.send(msg)
     await channel.send(generate_table())
-    print("✅ Step2: 2週間前リマインド送信完了。")
+    print("✅ Step2: 2週間前リマインド送信完了（一覧表）")
 
-# ====== /event_now コマンド（題名・日付・詳細対応） ======
+# ====== /event_now コマンド ======
 @tree.command(name="event_now", description="突発イベントをすぐ通知します。")
 @app_commands.describe(
     title="イベントの題名",
@@ -146,7 +148,7 @@ async def on_reaction_add(reaction, user):
             save_votes()
             break
 
-# ====== スケジューラー設定 ======
+# ====== スケジューラー ======
 scheduler = AsyncIOScheduler(timezone=JST)
 
 @bot.event
@@ -158,19 +160,17 @@ async def on_ready():
     except Exception as e:
         print(f"⚠️ コマンド同期エラー: {e}")
 
-    # Step1: 通常は毎週日曜 10:00 JST に自動投稿
+    # 本番用: 毎週日曜 10:00 JST 自動投稿
     scheduler.add_job(send_step1_schedule, CronTrigger(day_of_week="sun", hour=10, minute=0))
 
     # ====== テスト用スケジュール ======
     now = datetime.datetime.now(JST)
-    # 今日の12:00に三週間前通知
-    test_step1_time = now.replace(hour=12, minute=0, second=0, microsecond=0)
+    test_step1_time = now.replace(hour=12, minute=20, second=0, microsecond=0)  # 三週間前通知
     if test_step1_time < now:
         test_step1_time += datetime.timedelta(days=0)
     scheduler.add_job(send_step1_schedule, DateTrigger(run_date=test_step1_time))
 
-    # 今日の12:05に二週間前リマインド
-    test_step2_time = now.replace(hour=12, minute=5, second=0, microsecond=0)
+    test_step2_time = now.replace(hour=12, minute=25, second=0, microsecond=0)  # 二週間前リマインド
     if test_step2_time < now:
         test_step2_time += datetime.timedelta(days=0)
     scheduler.add_job(send_step2_remind, DateTrigger(run_date=test_step2_time))
