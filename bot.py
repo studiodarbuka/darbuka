@@ -41,7 +41,6 @@ def save_votes():
 
 # ====== スケジュール生成 ======
 def get_schedule_start():
-    """3週間後の日曜を取得"""
     today = datetime.datetime.now(JST)
     days_until_sunday = (6 - today.weekday()) % 7
     target = today + datetime.timedelta(days=days_until_sunday + 14)
@@ -51,15 +50,21 @@ def generate_week_schedule():
     start = get_schedule_start()
     return [(start + datetime.timedelta(days=i)).strftime("%Y-%m-%d (%a)") for i in range(7)]
 
+# ====== 投票テーブル作成（名前付き表示） ======
 def generate_table():
     table = "📊 **投票状況**\n"
-    table += "```\n日程           | 参加 | 調整 | 不可\n"
-    table += "--------------------------------\n"
+    table += "```\n日程           | 参加           | 調整       | 不可\n"
+    table += "------------------------------------------------------\n"
     for date, votes in vote_data.items():
-        s = sum(1 for v in votes.values() if v == "参加")
-        m = sum(1 for v in votes.values() if v == "調整")
-        n = sum(1 for v in votes.values() if v == "不可")
-        table += f"{date} |  {s:^3} |  {m:^3} |  {n:^3}\n"
+        participants = [user for user, v in votes.items() if v == "参加"]
+        maybes = [user for user, v in votes.items() if v == "調整"]
+        nopes = [user for user, v in votes.items() if v == "不可"]
+
+        s = ", ".join(participants) if participants else "-"
+        m = ", ".join(maybes) if maybes else "-"
+        n = ", ".join(nopes) if nopes else "-"
+
+        table += f"{date} | {s:<13} | {m:<10} | {n}\n"
     table += "```"
     return table
 
@@ -97,19 +102,30 @@ async def send_step2_remind():
     await channel.send(generate_table())
     print("✅ Step2: 2週間前リマインド送信完了。")
 
-# ====== Slash コマンド ======
-@tree.command(name="schedule", description="手動で日程投票を開始します。")
-async def schedule(interaction: discord.Interaction):
-    await interaction.response.send_message("📅 手動で日程投票を開始します。", ephemeral=True)
-    await send_step1_schedule()
-
+# ====== /event_now コマンド（題名・日付・詳細対応） ======
 @tree.command(name="event_now", description="突発イベントをすぐ通知します。")
-async def event_now(interaction: discord.Interaction, 内容: str):
+@app_commands.describe(
+    title="イベントの題名",
+    date="イベントの日付（例: 2025-10-16）",
+    detail="イベントの詳細内容"
+)
+async def event_now(
+    interaction: discord.Interaction,
+    title: str,
+    date: str,
+    detail: str
+):
     channel = discord.utils.get(interaction.guild.channels, name="突発イベント")
     if not channel:
         await interaction.response.send_message("⚠️ チャンネル「突発イベント」が見つかりません。", ephemeral=True)
         return
-    msg = f"🚨 **突発イベント発生！**\n{内容}"
+
+    msg = (
+        f"🚨 **突発イベント発生！**\n"
+        f"**題名:** {title}\n"
+        f"**日付:** {date}\n"
+        f"**詳細:** {detail}"
+    )
     await channel.send(msg)
     await interaction.response.send_message("✅ 突発イベントを送信しました！", ephemeral=True)
 
@@ -130,7 +146,7 @@ async def on_reaction_add(reaction, user):
             save_votes()
             break
 
-# ====== on_ready & スケジュール ======
+# ====== スケジューラー設定 ======
 scheduler = AsyncIOScheduler(timezone=JST)
 
 @bot.event
@@ -142,24 +158,26 @@ async def on_ready():
     except Exception as e:
         print(f"⚠️ コマンド同期エラー: {e}")
 
-    # Step1: 毎週日曜 10:00 JST に自動投稿
+    # Step1: 通常は毎週日曜 10:00 JST に自動投稿
     scheduler.add_job(send_step1_schedule, CronTrigger(day_of_week="sun", hour=10, minute=0))
 
-    # 🔹 テスト用：今日 11:15 に三週間後スケジュール投稿
+    # ====== テスト用スケジュール ======
     now = datetime.datetime.now(JST)
-    test_time_step1 = now.replace(hour=11, minute=15, second=0, microsecond=0)
-    test_time_step1 = JST.localize(test_time_step1.replace(tzinfo=None))
+    # 今日の12:00に三週間前通知
+    test_step1_time = now.replace(hour=12, minute=0, second=0, microsecond=0)
+    if test_step1_time < now:
+        test_step1_time += datetime.timedelta(days=0)
+    scheduler.add_job(send_step1_schedule, DateTrigger(run_date=test_step1_time))
 
-    # 🔹 テスト用：今日 11:25 に二週間前リマインド送信
-    test_time_step2 = now.replace(hour=11, minute=25, second=0, microsecond=0)
-    test_time_step2 = JST.localize(test_time_step2.replace(tzinfo=None))
-
-    scheduler.add_job(send_step1_schedule, DateTrigger(run_date=test_time_step1))
-    scheduler.add_job(send_step2_remind, DateTrigger(run_date=test_time_step2))
+    # 今日の12:05に二週間前リマインド
+    test_step2_time = now.replace(hour=12, minute=5, second=0, microsecond=0)
+    if test_step2_time < now:
+        test_step2_time += datetime.timedelta(days=0)
+    scheduler.add_job(send_step2_remind, DateTrigger(run_date=test_step2_time))
 
     scheduler.start()
     print(f"✅ Logged in as {bot.user}")
-    print(f"📅 テストジョブ登録済み: 11:15 → send_step1_schedule / 11:25 → send_step2_remind")
+    print("✅ Scheduler started.")
 
 # ====== メイン ======
 if __name__ == "__main__":
