@@ -161,11 +161,11 @@ async def on_ready():
 
     now = datetime.datetime.now(JST)
     # 三週間前通知テスト
-    three_week_test = now.replace(hour=14, minute=25, second=0, microsecond=0)
+    three_week_test = now.replace(hour=14, minute=28, second=0, microsecond=0)
     scheduler.add_job(send_step1_schedule, DateTrigger(run_date=three_week_test))
 
     # 二週間前リマインドテスト
-    two_week_test = now.replace(hour=14, minute=22, second=0, microsecond=0)
+    two_week_test = now.replace(hour=14, minute=30, second=0, microsecond=0)
     scheduler.add_job(send_step2_remind, DateTrigger(run_date=two_week_test))
 
     scheduler.start()
