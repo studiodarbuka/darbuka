@@ -24,7 +24,7 @@ VOTE_FILE = os.path.join(PERSISTENT_DIR, "votes.json")
 JST = pytz.timezone("Asia/Tokyo")
 
 # ====== 投票データ ======
-vote_data = {}  # { "2025-11-05 (Sun)": { "user_id": "参加/調整/不可" } }
+vote_data = {}
 
 def load_votes():
     global vote_data
@@ -40,6 +40,7 @@ def save_votes():
 
 # ====== スケジュール生成 ======
 def get_schedule_start():
+    """3週間後の日曜を取得"""
     today = datetime.datetime.now(JST)
     days_until_sunday = (6 - today.weekday()) % 7
     target = today + datetime.timedelta(days=days_until_sunday + 14)
@@ -49,44 +50,46 @@ def generate_week_schedule():
     start = get_schedule_start()
     return [(start + datetime.timedelta(days=i)).strftime("%Y-%m-%d (%a)") for i in range(7)]
 
-# ====== 投票状況テーブル ======
-def generate_table_with_users():
-    table = "📊 **投票状況**\n"
-    for date, votes in vote_data.items():
-        s_list = [f"<@{uid}>" for uid, v in votes.items() if v == "参加"]
-        m_list = [f"<@{uid}>" for uid, v in votes.items() if v == "調整"]
-        n_list = [f"<@{uid}>" for uid, v in votes.items() if v == "不可"]
-
-        table += f"**{date}**\n"
-        table += f"✅ 参加 ({len(s_list)}): {' '.join(s_list) if s_list else 'なし'}\n"
-        table += f"🤔 調整 ({len(m_list)}): {' '.join(m_list) if m_list else 'なし'}\n"
-        table += f"❌ 不可 ({len(n_list)}): {' '.join(n_list) if n_list else 'なし'}\n"
-        table += "--------------------------------\n"
-    return table
-
-# ====== 投票ボタン ======
+# ====== ボタン形式投票 ======
 class VoteView(discord.ui.View):
-    def __init__(self, date):
+    def __init__(self, date_str):
         super().__init__(timeout=None)
-        self.date = date
+        self.date_str = date_str
 
-    @discord.ui.button(label="参加 ✅", style=discord.ButtonStyle.success)
-    async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
-        vote_data[self.date][str(interaction.user.id)] = "参加"
-        save_votes()
-        await interaction.response.send_message(f"{interaction.user.name} が {self.date} に「参加 ✅」を投票しました！", ephemeral=True)
+    @discord.ui.button(label="参加(🟢)", style=discord.ButtonStyle.success)
+    async def yes_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.register_vote(interaction, "参加(🟢)")
 
-    @discord.ui.button(label="調整 🤔", style=discord.ButtonStyle.primary)
-    async def maybe(self, interaction: discord.Interaction, button: discord.ui.Button):
-        vote_data[self.date][str(interaction.user.id)] = "調整"
-        save_votes()
-        await interaction.response.send_message(f"{interaction.user.name} が {self.date} に「調整 🤔」を投票しました！", ephemeral=True)
+    @discord.ui.button(label="調整可(🟡)", style=discord.ButtonStyle.primary)
+    async def maybe_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.register_vote(interaction, "調整可(🟡)")
 
-    @discord.ui.button(label="不可 ❌", style=discord.ButtonStyle.danger)
-    async def cannot(self, interaction: discord.Interaction, button: discord.ui.Button):
-        vote_data[self.date][str(interaction.user.id)] = "不可"
+    @discord.ui.button(label="不可(🔴)", style=discord.ButtonStyle.danger)
+    async def no_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.register_vote(interaction, "不可(🔴)")
+
+    async def register_vote(self, interaction: discord.Interaction, status: str):
+        message_id = interaction.message.id
+        user = interaction.user.display_name
+
+        if message_id not in vote_data:
+            vote_data[message_id] = {}
+        if self.date_str not in vote_data[message_id]:
+            vote_data[message_id][self.date_str] = {"参加(🟢)": [], "調整可(🟡)": [], "不可(🔴)": []}
+
+        # 他の選択肢から削除して新しい方に追加
+        for k in vote_data[message_id][self.date_str]:
+            if user in vote_data[message_id][self.date_str][k]:
+                vote_data[message_id][self.date_str][k].remove(user)
+        vote_data[message_id][self.date_str][status].append(user)
         save_votes()
-        await interaction.response.send_message(f"{interaction.user.name} が {self.date} に「不可 ❌」を投票しました！", ephemeral=True)
+
+        # Embed更新
+        embed = discord.Embed(title=f"【予定候補】{self.date_str}")
+        for k, v in vote_data[message_id][self.date_str].items():
+            embed.add_field(name=k, value="\n".join(v) if v else "なし", inline=False)
+
+        await interaction.response.edit_message(embed=embed, view=self)
 
 # ====== メッセージ送信 ======
 async def send_step1_schedule():
@@ -97,14 +100,10 @@ async def send_step1_schedule():
         return
 
     week = generate_week_schedule()
-    global vote_data
-    vote_data = {date: {} for date in week}
-    save_votes()
-
     for date in week:
-        msg = f"📅 **三週間後の日程: {date}（投票開始）**"
-        await channel.send(msg, view=VoteView(date))
-
+        embed = discord.Embed(title=f"📅 三週間後の予定（投票開始） {date}")
+        view = VoteView(date)
+        await channel.send(embed=embed, view=view)
     print("✅ Step1: 三週間前スケジュール投稿完了。")
 
 async def send_step2_remind():
@@ -114,9 +113,16 @@ async def send_step2_remind():
         print("⚠️ チャンネル「日程」が見つかりません。")
         return
 
-    msg = "⏰ **2週間前になりました！投票状況を確認してください！**"
+    msg = "⏰ **2週間前になりました！投票をお願いします！**"
     await channel.send(msg)
-    await channel.send(generate_table_with_users())
+
+    # 投票状況一覧
+    for message_id, dates in vote_data.items():
+        for date_str, votes in dates.items():
+            embed = discord.Embed(title=f"【投票状況】{date_str}")
+            for k, v in votes.items():
+                embed.add_field(name=k, value="\n".join(v) if v else "なし", inline=False)
+            await channel.send(embed=embed)
     print("✅ Step2: 2週間前リマインド送信完了。")
 
 # ====== on_ready ======
@@ -132,13 +138,13 @@ async def on_ready():
         print(f"⚠️ コマンド同期エラー: {e}")
 
     now = datetime.datetime.now(JST)
-    # テスト用: 今日 13:42 に三週間前通知
-    test_time_step1 = now.replace(hour=13, minute=42, second=0, microsecond=0)
-    scheduler.add_job(send_step1_schedule, DateTrigger(run_date=test_time_step1))
+    # 三週間前通知テスト
+    three_week_test = now.replace(hour=13, minute=56, second=0, microsecond=0)
+    scheduler.add_job(send_step1_schedule, DateTrigger(run_date=three_week_test))
 
-    # テスト用: 今日 13:45 に二週間前リマインド
-    test_time_step2 = now.replace(hour=13, minute=45, second=0, microsecond=0)
-    scheduler.add_job(send_step2_remind, DateTrigger(run_date=test_time_step2))
+    # 二週間前リマインドテスト
+    two_week_test = now.replace(hour=13, minute=58, second=0, microsecond=0)
+    scheduler.add_job(send_step2_remind, DateTrigger(run_date=two_week_test))
 
     scheduler.start()
     print(f"✅ Logged in as {bot.user}")
