@@ -40,7 +40,6 @@ def save_votes():
 
 # ====== スケジュール生成 ======
 def get_schedule_start():
-    """3週間後の日曜を取得"""
     today = datetime.datetime.now(JST)
     days_until_sunday = (6 - today.weekday()) % 7
     target = today + datetime.timedelta(days=days_until_sunday + 14)
@@ -52,7 +51,6 @@ def generate_week_schedule():
 
 # ====== 投票状況テーブル ======
 def generate_table_with_users():
-    """投票状況 + ユーザー名を表示"""
     table = "📊 **投票状況**\n"
     for date, votes in vote_data.items():
         s_list = [f"<@{uid}>" for uid, v in votes.items() if v == "参加"]
@@ -134,12 +132,12 @@ async def on_ready():
         print(f"⚠️ コマンド同期エラー: {e}")
 
     now = datetime.datetime.now(JST)
-    # テスト用に今日 13:35 に三週間前通知
-    test_time_step1 = now.replace(hour=13, minute=35, second=0, microsecond=0)
+    # テスト用: 今日 13:42 に三週間前通知
+    test_time_step1 = now.replace(hour=13, minute=42, second=0, microsecond=0)
     scheduler.add_job(send_step1_schedule, DateTrigger(run_date=test_time_step1))
 
-    # テスト用に今日 13:40 に二週間前リマインド
-    test_time_step2 = now.replace(hour=13, minute=40, second=0, microsecond=0)
+    # テスト用: 今日 13:45 に二週間前リマインド
+    test_time_step2 = now.replace(hour=13, minute=45, second=0, microsecond=0)
     scheduler.add_job(send_step2_remind, DateTrigger(run_date=test_time_step2))
 
     scheduler.start()
