@@ -250,9 +250,9 @@ async def on_ready():
     now = datetime.datetime.now(JST)
 
     # 本番用に時間を指定（ここでは例として18:42/18:44/18:46）
-    three_week_test = now.replace(hour=18, minute=42, second=0, microsecond=0)
-    two_week_test = now.replace(hour=18, minute=44, second=0, microsecond=0)
-    one_week_test = now.replace(hour=18, minute=46, second=0, microsecond=0)
+    three_week_test = now.replace(hour=19, minute=2, second=0, microsecond=0)
+    two_week_test = now.replace(hour=19, minute=4, second=0, microsecond=0)
+    one_week_test = now.replace(hour=19, minute=6, second=0, microsecond=0)
 
     scheduler.add_job(send_step1_schedule, DateTrigger(run_date=three_week_test))
     scheduler.add_job(send_step2_remind, DateTrigger(run_date=two_week_test))
