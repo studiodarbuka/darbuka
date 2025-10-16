@@ -72,7 +72,7 @@ class VoteView(discord.ui.View):
                 user_current_status = k
                 break
 
-        # トグル式投票
+        # トグル式投票（複数選択不可）
         if user_current_status == status:
             vote_data[message_id][self.date_str][status].remove(user_name)
         else:
@@ -138,21 +138,19 @@ async def send_step2_remind():
         return
 
     header = "⏰ **2週間前になりました！投票をお願いします！**\n以下、現状の投票状況です：\n"
-    all_lines = [header]
 
     for message_id, dates in vote_data.items():
         for date_str, votes in dates.items():
-            all_lines.append(f"📅 {date_str}")
+            lines = [header, f"📅 {date_str}"]
             for status, users in votes.items():
                 if isinstance(users, list):
-                    all_lines.append(f"- {status} ({len(users)}人): " + (", ".join(users) if users else "なし"))
-            all_lines.append("")
+                    lines.append(f"- {status} ({len(users)}人): " + (", ".join(users) if users else "なし"))
+            text_msg = "```\n" + "\n".join(lines) + "\n```"
+            await channel.send(text_msg)
 
-    text_msg = "```\n" + "\n".join(all_lines) + "\n```"
-    await channel.send(text_msg)
     print("✅ Step2: 2週間前リマインド送信完了。")
 
-# ====== Step3: 1週間前未投票者通知 + 確定通知 ======
+# ====== Step3: 1週間前未投票者通知 + 日付ごと確定通知 ======
 async def send_step3_confirm():
     await bot.wait_until_ready()
     channel = discord.utils.get(bot.get_all_channels(), name="日程")
@@ -161,8 +159,7 @@ async def send_step3_confirm():
         return
 
     load_votes()
-    all_lines = ["⏰ **1週間前リマインド：未投票者確認**\n"]
-    exclude_users = [bot.user.display_name, "あなたの表示名"]
+    exclude_users = [bot.user.display_name, "あなたの表示名"]  # Bot と自分を除外
 
     for message_id, dates in vote_data.items():
         message_id = str(message_id)
@@ -185,7 +182,7 @@ async def send_step3_confirm():
                     unvoted_mentions.append(member_obj.mention)
 
             unvoted_text = ", ".join(unvoted_mentions) if unvoted_mentions else "なし"
-            all_lines.append(f"📅 {date_str}\n未投票者: {unvoted_text}\n")
+            await channel.send(f"📅 {date_str}\n未投票者: {unvoted_text}")
 
             # --- 参加票数3人以上で確定通知 ---
             participants = votes.get("参加(🟢)", [])
@@ -208,9 +205,7 @@ async def send_step3_confirm():
                 save_votes()
                 print(f"✅ 確定通知送信: {date_str}")
 
-    text_msg = "\n".join(all_lines)
-    await channel.send(text_msg)
-    print("✅ Step3: 1週間前未投票者通知完了。")
+    print("✅ Step3: 1週間前未投票者通知＋確定通知完了。")
 
 # ====== /event_now コマンド ======
 @tree.command(name="event_now", description="突発イベントを作成します")
@@ -242,6 +237,7 @@ async def event_now(interaction: discord.Interaction, title: str, date: str, det
 # ====== on_ready ======
 scheduler = AsyncIOScheduler(timezone=JST)
 
+# ====== on_ready ======
 @bot.event
 async def on_ready():
     load_votes()
@@ -253,11 +249,10 @@ async def on_ready():
 
     now = datetime.datetime.now(JST)
 
-    # テスト用に時間を設定（秒単位）
+    # 本番用に時間を指定（ここでは例として18:42/18:44/18:46）
     three_week_test = now.replace(hour=18, minute=42, second=0, microsecond=0)
     two_week_test = now.replace(hour=18, minute=44, second=0, microsecond=0)
     one_week_test = now.replace(hour=18, minute=46, second=0, microsecond=0)
-
 
     scheduler.add_job(send_step1_schedule, DateTrigger(run_date=three_week_test))
     scheduler.add_job(send_step2_remind, DateTrigger(run_date=two_week_test))
@@ -266,6 +261,7 @@ async def on_ready():
 
     print(f"✅ Logged in as {bot.user}")
     print("✅ Scheduler started.")
+
 
 # ====== メイン ======
 if __name__ == "__main__":
