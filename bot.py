@@ -40,7 +40,6 @@ def save_votes():
 
 # ====== スケジュール生成 ======
 def get_schedule_start():
-    """3週間後の日曜を取得"""
     today = datetime.datetime.now(JST)
     days_until_sunday = (6 - today.weekday()) % 7
     target = today + datetime.timedelta(days=days_until_sunday + 14)
@@ -50,7 +49,7 @@ def generate_week_schedule():
     start = get_schedule_start()
     return [(start + datetime.timedelta(days=i)).strftime("%Y-%m-%d (%a)") for i in range(7)]
 
-# ====== ボタン形式投票（トグル対応版） ======
+# ====== ボタン形式投票 ======
 class VoteView(discord.ui.View):
     def __init__(self, date_str):
         super().__init__(timeout=None)
@@ -65,17 +64,17 @@ class VoteView(discord.ui.View):
         if self.date_str not in vote_data[message_id]:
             vote_data[message_id][self.date_str] = {"参加(🟢)": [], "オンライン可(🟡)": [], "不可(🔴)": []}
 
+        # 既存投票チェック
         user_current_status = None
         for k, v in vote_data[message_id][self.date_str].items():
             if user_name in v:
                 user_current_status = k
                 break
 
-        # 同じボタン → 削除（トグルオフ）
+        # 同じボタン押下 → 削除（トグル）
         if user_current_status == status:
             vote_data[message_id][self.date_str][status].remove(user_name)
         else:
-            # まず全てから削除してから新しい方に追加
             for k in vote_data[message_id][self.date_str]:
                 if user_name in vote_data[message_id][self.date_str][k]:
                     vote_data[message_id][self.date_str][k].remove(user_name)
@@ -83,7 +82,7 @@ class VoteView(discord.ui.View):
 
         save_votes()
 
-        # Embed更新
+        # Embed 更新
         embed = discord.Embed(title=f"【予定候補】{self.date_str}")
         for k, v in vote_data[message_id][self.date_str].items():
             embed.add_field(name=f"{k} ({len(v)}人)", value="\n".join(v) if v else "0人", inline=False)
@@ -114,9 +113,7 @@ async def send_step1_schedule():
     for date in week:
         embed_title = f"📅 三週間後の予定（投票開始） {date}"
         message_id_placeholder = f"tmp-{date}"
-        vote_data[message_id_placeholder] = {
-            date: {"参加(🟢)": [], "オンライン可(🟡)": [], "不可(🔴)": []}
-        }
+        vote_data[message_id_placeholder] = {date: {"参加(🟢)": [], "オンライン可(🟡)": [], "不可(🔴)": []}}
         save_votes()
 
         embed = discord.Embed(title=embed_title)
@@ -125,7 +122,6 @@ async def send_step1_schedule():
 
         view = VoteView(date)
         msg = await channel.send(embed=embed, view=view)
-
         vote_data[str(msg.id)] = vote_data.pop(message_id_placeholder)
         save_votes()
 
@@ -164,28 +160,27 @@ async def send_step3_confirm():
     load_votes()
     all_lines = ["⏰ **1週間前リマインド：未投票者確認**\n"]
 
+    exclude_users = [bot.user.display_name, "あなたの表示名"]  # 除外したいユーザー名
+
     for message_id, dates in vote_data.items():
+        message_id = str(message_id)
         for date_str, votes in dates.items():
-            # 投票済みユーザーを集計
+            if not votes:
+                continue
+
             voted_users = set()
             for user_list in votes.values():
                 voted_users.update(user_list)
 
-            # メンションにするには guild からメンバー取得
             guild = channel.guild
             all_members = {m.display_name: m for m in guild.members}
 
             unvoted_mentions = []
-            for user_name in all_members:
-                if user_name not in voted_users:
-                    member_obj = all_members[user_name]
+            for user_name, member_obj in all_members.items():
+                if user_name not in voted_users and user_name not in exclude_users:
                     unvoted_mentions.append(member_obj.mention)
 
-            if not unvoted_mentions:
-                unvoted_text = "なし"
-            else:
-                unvoted_text = ", ".join(unvoted_mentions)
-
+            unvoted_text = ", ".join(unvoted_mentions) if unvoted_mentions else "なし"
             all_lines.append(f"📅 {date_str}\n未投票者: {unvoted_text}\n")
 
     text_msg = "\n".join(all_lines)
@@ -193,11 +188,11 @@ async def send_step3_confirm():
     print("✅ Step3: 1週間前未投票者通知完了。")
 
 # ====== /event_now コマンド ======
-@tree.command(name="event_now", description="突発イベントを作成します（手動イベント）")
+@tree.command(name="event_now", description="突発イベントを作成します")
 @app_commands.describe(
-    title="イベントのタイトルを入力",
-    date="イベントの日付を YYYY-MM-DD 形式で入力（例：2025-10-20）",
-    detail="イベントの詳細を入力（任意）"
+    title="イベントのタイトル",
+    date="YYYY-MM-DD形式の日付",
+    detail="詳細（任意）"
 )
 async def event_now(interaction: discord.Interaction, title: str, date: str, detail: str = "詳細なし"):
     try:
@@ -215,12 +210,9 @@ async def event_now(interaction: discord.Interaction, title: str, date: str, det
     await interaction.response.defer()
     msg = await interaction.channel.send(embed=embed, view=view)
 
-    vote_data[str(msg.id)] = {
-        date: {"参加(🟢)": [], "オンライン可(🟡)": [], "不可(🔴)": []}
-    }
+    vote_data[str(msg.id)] = {date: {"参加(🟢)": [], "オンライン可(🟡)": [], "不可(🔴)": []}}
     save_votes()
-
-    await interaction.followup.send(f"✅ イベント『{title}』を作成しました！", ephemeral=True)
+    await interaction.followup.send("✅ 突発イベントを作成しました！", ephemeral=True)
 
 # ====== on_ready ======
 scheduler = AsyncIOScheduler(timezone=JST)
@@ -235,9 +227,12 @@ async def on_ready():
         print(f"⚠️ コマンド同期エラー: {e}")
 
     now = datetime.datetime.now(JST)
-    three_week_test = now.replace(hour=17, minute=50, second=0, microsecond=0)
-    two_week_test = now.replace(hour=17, minute=52, second=0, microsecond=0)
-    one_week_test = now.replace(hour=17, minute=54, second=0, microsecond=0)
+
+    # テスト用に時間を設定（適宜変更）
+    three_week_test = now.replace(hour=18, minute=13, second=0, microsecond=0)
+    two_week_test = now.replace(hour=18, minute=15, second=0, microsecond=0)
+    one_week_test = now.replace(hour=18, minute=17, second=0, microsecond=0)
+
 
     scheduler.add_job(send_step1_schedule, DateTrigger(run_date=three_week_test))
     scheduler.add_job(send_step2_remind, DateTrigger(run_date=two_week_test))
