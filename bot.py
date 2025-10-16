@@ -14,7 +14,7 @@ from apscheduler.triggers.cron import CronTrigger
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
-tree = bot.tree  # すでに commands.Bot には CommandTree があるので再生成しない
+tree = bot.tree
 
 # ====== 永続保存設定 ======
 PERSISTENT_DIR = "/opt/render/project/src/data"
@@ -130,7 +130,7 @@ async def on_reaction_add(reaction, user):
             save_votes()
             break
 
-# ====== on_ready ======
+# ====== on_ready & スケジュール ======
 scheduler = AsyncIOScheduler(timezone=JST)
 
 @bot.event
@@ -145,16 +145,21 @@ async def on_ready():
     # Step1: 毎週日曜 10:00 JST に自動投稿
     scheduler.add_job(send_step1_schedule, CronTrigger(day_of_week="sun", hour=10, minute=0))
 
-    # Step2: テスト用に今日 15:50 に送信
+    # 🔹 テスト用：今日 11:15 に三週間後スケジュール投稿
     now = datetime.datetime.now(JST)
-    test_time = now.replace(hour=15, minute=50, second=0, microsecond=0)
-    if test_time < now:
-        test_time += datetime.timedelta(days=0)  # 過ぎていれば今日再送信
-    scheduler.add_job(send_step2_remind, DateTrigger(run_date=test_time))
+    test_time_step1 = now.replace(hour=11, minute=15, second=0, microsecond=0)
+    test_time_step1 = JST.localize(test_time_step1.replace(tzinfo=None))
+
+    # 🔹 テスト用：今日 11:25 に二週間前リマインド送信
+    test_time_step2 = now.replace(hour=11, minute=25, second=0, microsecond=0)
+    test_time_step2 = JST.localize(test_time_step2.replace(tzinfo=None))
+
+    scheduler.add_job(send_step1_schedule, DateTrigger(run_date=test_time_step1))
+    scheduler.add_job(send_step2_remind, DateTrigger(run_date=test_time_step2))
 
     scheduler.start()
     print(f"✅ Logged in as {bot.user}")
-    print("✅ Scheduler started.")
+    print(f"📅 テストジョブ登録済み: 11:15 → send_step1_schedule / 11:25 → send_step2_remind")
 
 # ====== メイン ======
 if __name__ == "__main__":
