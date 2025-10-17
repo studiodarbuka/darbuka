@@ -99,7 +99,6 @@ async def send_step1_schedule():
     await bot.wait_until_ready()
     guild = bot.guilds[0]
 
-    # カテゴリ取得
     category_beginner = discord.utils.get(guild.categories, name="初級")
     category_intermediate = discord.utils.get(guild.categories, name="中級")
     if not category_beginner or not category_intermediate:
@@ -109,13 +108,11 @@ async def send_step1_schedule():
     start = get_schedule_start()
     week_name = get_week_name(start)
 
-    # チャンネル名
     ch_names = {
         "初級": f"{week_name}-初級",
         "中級": f"{week_name}-中級"
     }
 
-    # チャンネル作成（存在チェックあり）
     channels = {}
     for level, ch_name in ch_names.items():
         existing = discord.utils.get(guild.text_channels, name=ch_name)
@@ -126,7 +123,6 @@ async def send_step1_schedule():
             new_ch = await guild.create_text_channel(ch_name, category=category)
             channels[level] = new_ch
 
-    # 投票Embedを両方に送信
     week = generate_week_schedule()
     for level, ch in channels.items():
         for date in week:
@@ -143,48 +139,33 @@ async def send_step1_schedule():
 
     print("✅ Step1: 初級・中級チャンネルへ三週間後スケジュール投稿完了。")
 
-# ====== Step2: リマインド送信 ======
+# ====== Step2: 二週間前リマインド ======
 async def send_step2_remind():
     await bot.wait_until_ready()
-    guild = bot.guilds[0]
+    print("🔔 Step2: 二週間前リマインドが実行されました（仮実装）")
 
-    start = get_schedule_start()
-    week_name = get_week_name(start)
-
-    for level in ["初級", "中級"]:
-        ch_name = f"{week_name}-{level}"
-        ch = discord.utils.get(guild.text_channels, name=ch_name)
-        if not ch:
-            print(f"⚠️ チャンネル「{ch_name}」が見つかりません。")
-            continue
-
-        await ch.send("⏰ 【リマインド】まもなく予定を確定します。投票がまだの方はお願いします！")
-
-        # 投票状況の簡易まとめEmbed
-        summary_embed = discord.Embed(title=f"🗳️ {level} の投票状況まとめ")
-        for msg_id, data in vote_data.items():
-            for date, votes in data.items():
-                summary_embed.add_field(
-                    name=f"{date}",
-                    value="\n".join([f"{k}: {len(v)}人" for k, v in votes.items()]),
-                    inline=False
-                )
-        await ch.send(embed=summary_embed)
-
-    print("✅ Step2: リマインド送信完了。")
-
-# ====== 起動・スケジューラー設定 ======
+# ====== Bot起動時スケジュール ======
 @bot.event
 async def on_ready():
     print(f"✅ ログイン完了: {bot.user}")
     scheduler = AsyncIOScheduler(timezone=JST)
 
     now = datetime.datetime.now(JST)
-    scheduler.add_job(send_step1_schedule, DateTrigger(run_date=now + datetime.timedelta(seconds=5)))
-    scheduler.add_job(send_step2_remind, DateTrigger(run_date=now + datetime.timedelta(seconds=15)))
+    step1_time = now.replace(hour=14, minute=51, second=0, microsecond=0)
+    step2_time = now.replace(hour=14, minute=55, second=0, microsecond=0)
+
+    if now >= step1_time:
+        step1_time += datetime.timedelta(days=1)
+    if now >= step2_time:
+        step2_time += datetime.timedelta(days=1)
+
+    scheduler.add_job(send_step1_schedule, DateTrigger(run_date=step1_time))
+    scheduler.add_job(send_step2_remind, DateTrigger(run_date=step2_time))
+
+    print(f"📅 Step1実行予定: {step1_time}")
+    print(f"📅 Step2実行予定: {step2_time}")
 
     scheduler.start()
-    print("🕒 Step1（5秒後）・Step2（15秒後）をテストスケジュールしました。")
 
 load_votes()
 bot.run(os.getenv("DISCORD_BOT_TOKEN"))
