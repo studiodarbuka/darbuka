@@ -130,40 +130,31 @@ async def send_step1_schedule():
             embed.add_field(name="参加(🟢)", value="0人", inline=False)
             embed.add_field(name="オンライン可(🟡)", value="0人", inline=False)
             embed.add_field(name="不可(🔴)", value="0人", inline=False)
-
             view = VoteView(date)
             msg = await ch.send(embed=embed, view=view)
-
             vote_data[str(msg.id)] = {date: {"参加(🟢)": [], "オンライン可(🟡)": [], "不可(🔴)": []}}
             save_votes()
 
     print("✅ Step1: 初級・中級チャンネルへ三週間後スケジュール投稿完了。")
 
-# ====== Step2: 二週間前リマインド ======
+# ====== Step2: リマインド（サンプル） ======
 async def send_step2_remind():
     await bot.wait_until_ready()
-    print("🔔 Step2: 二週間前リマインドが実行されました（仮実装）")
+    print("✅ Step2: リマインド実行（ここに処理を書く）")
 
-# ====== Bot起動時スケジュール ======
+# ====== テスト起動（Step1:14:51 / Step2:14:55） ======
 @bot.event
 async def on_ready():
     print(f"✅ ログイン完了: {bot.user}")
     scheduler = AsyncIOScheduler(timezone=JST)
 
     now = datetime.datetime.now(JST)
-    step1_time = now.replace(hour=14, minute=51, second=0, microsecond=0)
-    step2_time = now.replace(hour=14, minute=55, second=0, microsecond=0)
+    step1_time = now.replace(hour=14, minute=55, second=0, microsecond=0)
+    step2_time = now.replace(hour=14, minute=58, second=0, microsecond=0)
 
-    if now >= step1_time:
-        step1_time += datetime.timedelta(days=1)
-    if now >= step2_time:
-        step2_time += datetime.timedelta(days=1)
-
+    # JST付き datetime を DateTrigger に渡す
     scheduler.add_job(send_step1_schedule, DateTrigger(run_date=step1_time))
     scheduler.add_job(send_step2_remind, DateTrigger(run_date=step2_time))
-
-    print(f"📅 Step1実行予定: {step1_time}")
-    print(f"📅 Step2実行予定: {step2_time}")
 
     scheduler.start()
 
