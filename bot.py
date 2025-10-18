@@ -185,7 +185,7 @@ async def on_ready():
     scheduler.add_job(send_step1_schedule, DateTrigger(run_date=now))
 
     # Step2 10秒後
-    now2 = datetime.datetime.now(JST) + datetime.timedelta(seconds=10)
+    now2 = datetime.datetime.now(JST) + datetime.timedelta(seconds=20)
     scheduler.add_job(send_step2_reminder, DateTrigger(run_date=now2))
 
     scheduler.start()
