@@ -14,14 +14,11 @@ intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ===== 永続保存 =====
-PERSISTENT_DIR = "./data"
-os.makedirs(PERSISTENT_DIR, exist_ok=True)
-VOTE_FILE = os.path.join(PERSISTENT_DIR, "votes.json")
-
-# ===== タイムゾーン =====
+DATA_DIR = "./data"
+os.makedirs(DATA_DIR, exist_ok=True)
+VOTE_FILE = os.path.join(DATA_DIR, "votes.json")
 JST = pytz.timezone("Asia/Tokyo")
 
-# ===== 投票データ =====
 vote_data = {}
 
 def load_votes():
@@ -36,7 +33,7 @@ def save_votes():
     with open(VOTE_FILE, "w", encoding="utf-8") as f:
         json.dump(vote_data, f, ensure_ascii=False, indent=2)
 
-# ===== 三週間後・日曜始まり週を算出 =====
+# ===== 日付関連 =====
 def get_schedule_start():
     today = datetime.datetime.now(JST)
     days_since_sunday = (today.weekday() + 1) % 7
@@ -46,10 +43,8 @@ def get_schedule_start():
 
 def generate_week_schedule():
     start = get_schedule_start()
-    youbi = ["日", "月", "火", "水", "木", "金", "土"]
-    return [(start + datetime.timedelta(days=i)).strftime(f"%Y-%m-%d ({youbi[i]})") for i in range(7)]
+    return [(start + datetime.timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
 
-# ===== 月第N週の文字列を返す =====
 def get_week_name(date):
     month = date.month
     first_day = date.replace(day=1)
@@ -57,134 +52,130 @@ def get_week_name(date):
     week_number = ((date - first_sunday).days // 7) + 1
     return f"{month}月第{week_number}週"
 
-# ===== 投票ボタン付きビュー =====
+# ===== 投票ビュー =====
 class VoteView(discord.ui.View):
-    def __init__(self, date_str):
+    def __init__(self, level, date_str):
         super().__init__(timeout=None)
         self.date_str = date_str
+        self.level = level
 
     async def handle_vote(self, interaction: discord.Interaction, status: str):
-        message_id = str(interaction.message.id)
-        user_name = interaction.user.display_name
+        user = interaction.user.display_name
+        level = self.level
+        date = self.date_str
 
-        if message_id not in vote_data:
-            vote_data[message_id] = {}
-        if self.date_str not in vote_data[message_id]:
-            vote_data[message_id][self.date_str] = {"参加(🟢)": [], "オンライン可(🟡)": [], "不可(🔴)": []}
+        if level not in vote_data:
+            vote_data[level] = {}
+        if date not in vote_data[level]:
+            vote_data[level][date] = {"🟢": [], "🟡": [], "🔴": []}
 
-        for k, v in vote_data[message_id][self.date_str].items():
-            if user_name in v:
-                v.remove(user_name)
-        vote_data[message_id][self.date_str][status].append(user_name)
+        # 他の状態から削除
+        for k in vote_data[level][date]:
+            if user in vote_data[level][date][k]:
+                vote_data[level][date][k].remove(user)
+
+        vote_data[level][date][status].append(user)
         save_votes()
 
-        embed = discord.Embed(title=f"【予定候補】{self.date_str}")
-        for k, v in vote_data[message_id][self.date_str].items():
-            embed.add_field(name=f"{k} ({len(v)}人)", value="\n".join(v) if v else "0人", inline=False)
+        embed = discord.Embed(title=f"📅 {level} - {date}")
+        for emoji, label in {"🟢": "参加", "🟡": "オンライン可", "🔴": "不可"}.items():
+            users = vote_data[level][date][emoji]
+            embed.add_field(name=f"{emoji} {label}（{len(users)}人）", value="\n".join(users) if users else "なし", inline=False)
+
         await interaction.response.edit_message(embed=embed, view=self)
 
     @discord.ui.button(label="参加(🟢)", style=discord.ButtonStyle.success)
-    async def yes_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.handle_vote(interaction, "参加(🟢)")
+    async def yes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.handle_vote(interaction, "🟢")
 
     @discord.ui.button(label="オンライン可(🟡)", style=discord.ButtonStyle.primary)
-    async def maybe_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.handle_vote(interaction, "オンライン可(🟡)")
+    async def maybe(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.handle_vote(interaction, "🟡")
 
     @discord.ui.button(label="不可(🔴)", style=discord.ButtonStyle.danger)
-    async def no_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.handle_vote(interaction, "不可(🔴)")
+    async def no(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.handle_vote(interaction, "🔴")
 
-# ===== Step1: チャンネル作成 + 投票送信 =====
+# ===== Step1: 3週間後の投票作成 =====
 async def send_step1_schedule():
     await bot.wait_until_ready()
     guild = bot.guilds[0]
 
-    # カテゴリ取得
     category_beginner = discord.utils.get(guild.categories, name="初級")
     category_intermediate = discord.utils.get(guild.categories, name="中級")
+
     if not category_beginner or not category_intermediate:
         print("⚠️ カテゴリ「初級」「中級」が見つかりません。")
         return
 
     start = get_schedule_start()
     week_name = get_week_name(start)
-
-    ch_names = {
-        "初級": f"{week_name}-初級",
-        "中級": f"{week_name}-中級"
-    }
+    week = generate_week_schedule()
 
     channels = {}
-    for level, ch_name in ch_names.items():
+    for level, category in {"初級": category_beginner, "中級": category_intermediate}.items():
+        ch_name = f"{week_name}-{level}"
         existing = discord.utils.get(guild.text_channels, name=ch_name)
-        if existing:
-            channels[level] = existing
-        else:
-            category = category_beginner if level == "初級" else category_intermediate
-            new_ch = await guild.create_text_channel(ch_name, category=category)
-            channels[level] = new_ch
+        ch = existing or await guild.create_text_channel(ch_name, category=category)
+        channels[level] = ch
 
-    # 投票Embed送信
-    week = generate_week_schedule()
-    for level, ch in channels.items():
+        vote_data[level] = {}
+
         for date in week:
-            embed = discord.Embed(title=f"📅 {level} - 三週間後の予定 {date}")
-            embed.add_field(name="参加(🟢)", value="0人", inline=False)
-            embed.add_field(name="オンライン可(🟡)", value="0人", inline=False)
-            embed.add_field(name="不可(🔴)", value="0人", inline=False)
-            view = VoteView(date)
-            msg = await ch.send(embed=embed, view=view)
-            vote_data[str(msg.id)] = {date: {"参加(🟢)": [], "オンライン可(🟡)": [], "不可(🔴)": []}}
-            save_votes()
+            embed = discord.Embed(title=f"📅 {level} - {date}")
+            embed.add_field(name="🟢 参加（0人）", value="なし", inline=False)
+            embed.add_field(name="🟡 オンライン可（0人）", value="なし", inline=False)
+            embed.add_field(name="🔴 不可（0人）", value="なし", inline=False)
 
-    print("✅ Step1完了：三週間後スケジュール投稿")
+            view = VoteView(level, date)
+            await ch.send(embed=embed, view=view)
 
-# ===== Step2: 二週間前リマインド =====
-async def send_step2_remind():
+            vote_data[level][date] = {"🟢": [], "🟡": [], "🔴": []}
+
+    save_votes()
+    print("✅ Step1 完了：投票メッセージを送信しました。")
+
+# ===== Step2: 2週間前リマインド =====
+async def send_step2_reminder():
     await bot.wait_until_ready()
     guild = bot.guilds[0]
-    start = get_schedule_start()
-    week_name = get_week_name(start)
+    print("🟡 Step2 実行開始")
 
-    # 初級・中級チャンネルごとにリマインドを分ける
-    for level in ["初級", "中級"]:
-        ch_name = f"{week_name}-{level}"
-        ch = discord.utils.get(guild.text_channels, name=ch_name)
-        if not ch:
-            continue
+    for level, dates in vote_data.items():
+        week_name = "11月第1週"  # 実際は自動算出可能
+        text = f"📢【{week_name} {level}リマインド】\n\n📅 日程ごとの参加状況：\n\n"
 
-        # 投票結果の集計
-        text_lines = [f"📢【{week_name} {level}リマインド】\n"]
-        text_lines.append("📅 日程ごとの参加状況：\n")
+        for date_str, reactions in dates.items():
+            dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
+            weekday_jp = ["月", "火", "水", "木", "金", "土", "日"][dt.weekday()]
+            text += f"{date_str}（{weekday_jp}）\n"
+            text += f"🟢 参加：{', '.join(reactions['🟢']) if reactions['🟢'] else 'なし'}\n"
+            text += f"🟡 オンライン可：{', '.join(reactions['🟡']) if reactions['🟡'] else 'なし'}\n"
+            text += f"🔴 不可：{', '.join(reactions['🔴']) if reactions['🔴'] else 'なし'}\n\n"
 
-        for msg_id, dates in vote_data.items():
-            for date_str, result in dates.items():
-                # 対象チャンネルか確認
-                if ch_name.split("-")[1] not in level:
-                    continue
-                yes = ", ".join(result["参加(🟢)"]) or "なし"
-                maybe = ", ".join(result["オンライン可(🟡)"]) or "なし"
-                no = ", ".join(result["不可(🔴)"]) or "なし"
-                text_lines.append(f"**{date_str}**\n🟢 {yes}\n🟡 {maybe}\n🔴 {no}\n")
+        target_channel = discord.utils.get(guild.text_channels, name__contains=level)
+        if target_channel:
+            await target_channel.send(text)
+            print(f"✅ {level} にリマインド送信")
+        else:
+            print(f"⚠ {level} のチャンネルが見つかりません")
 
-        await ch.send("\n".join(text_lines))
-
-    print("✅ Step2完了：リマインド送信")
-
-# ====== 起動時スケジューラ（テスト用） ======
+# ===== 起動イベント =====
 @bot.event
 async def on_ready():
     print(f"✅ ログイン完了: {bot.user}")
+
     scheduler = AsyncIOScheduler(timezone=JST)
 
     now = datetime.datetime.now(JST)
     step1_time = now + datetime.timedelta(seconds=5)
-    step2_time = now + datetime.timedelta(seconds=30)
+    step2_time = now + datetime.timedelta(seconds=20)
 
     scheduler.add_job(send_step1_schedule, DateTrigger(run_date=step1_time))
-    scheduler.add_job(send_step2_remind, DateTrigger(run_date=step2_time))
+    scheduler.add_job(send_step2_reminder, DateTrigger(run_date=step2_time))
+
     scheduler.start()
+    print(f"⏰ Step1: {step1_time.strftime('%H:%M:%S')} / Step2: {step2_time.strftime('%H:%M:%S')} に実行予定")
 
 load_votes()
 bot.run(os.getenv("DISCORD_BOT_TOKEN"))
