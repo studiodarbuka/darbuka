@@ -148,7 +148,7 @@ async def send_step1_schedule():
             embed.add_field(name="不可(🔴)", value="0人", inline=False)
             view = VoteView(date)
             msg = await ch.send(embed=embed, view=view)
-            vote_data[str(msg.id)] = {date: {"参加(🟢)": [], "オンライン可(🟡)": [], "不可(🔴)": []}}
+            vote_data[str(msg.id)] = {"channel": ch.id, date: {"参加(🟢)": [], "オンライン可(🟡)": [], "不可(🔴)": []}}
             save_votes()
 
     print("✅ Step1: 初級・中級チャンネルへ三週間後スケジュール投稿完了。")
@@ -171,17 +171,20 @@ async def send_step2_remind():
         message = f"📢【{week_name} {level}リマインド】\n\n📅 日程ごとの参加状況：\n\n"
         for date in week:
             for msg_id, data in vote_data.items():
-                if date in data:
-                    date_votes = data[date]
-                    message += f"{date}\n"
-                    message += f"参加(🟢) " + (", ".join(date_votes["参加(🟢)"]) if date_votes["参加(🟢)"] else "なし") + "\n"
-                    message += f"オンライン可(🟡) " + (", ".join(date_votes["オンライン可(🟡)"]) if date_votes["オンライン可(🟡)"] else "なし") + "\n"
-                    message += f"不可(🔴) " + (", ".join(date_votes["不可(🔴)"]) if date_votes["不可(🔴)"] else "なし") + "\n\n"
+                if data.get("channel") != target_channel.id:
+                    continue
+                if date not in data:
+                    continue
+                date_votes = data[date]
+                message += f"{date}\n"
+                message += f"参加(🟢) " + (", ".join(date_votes["参加(🟢)"]) if date_votes["参加(🟢)"] else "なし") + "\n"
+                message += f"オンライン可(🟡) " + (", ".join(date_votes["オンライン可(🟡)"]) if date_votes["オンライン可(🟡)"] else "なし") + "\n"
+                message += f"不可(🔴) " + (", ".join(date_votes["不可(🔴)"]) if date_votes["不可(🔴)"] else "なし") + "\n\n"
         await target_channel.send(message)
 
     print("✅ Step2: 二週間前リマインド送信完了。")
 
-# ====== Step3: 1週間前催促（未投票者メンション） ======
+# ====== Step3: 1週間前催促（投票なしユーザーメンション） ======
 async def send_step3_remind():
     await bot.wait_until_ready()
     guild = bot.guilds[0]
@@ -189,32 +192,39 @@ async def send_step3_remind():
     start = get_schedule_start()
     week_name = get_week_name(start)
 
-    for level in ["初級", "中級"]:
+    for level, role_name in [("初級", "初級ロール"), ("中級", "中級ロール")]:
         ch_name = f"{week_name}-{level}"
         target_channel = discord.utils.get(guild.text_channels, name=ch_name)
         if not target_channel:
             continue
 
-        role = discord.utils.get(guild.roles, name=level)
+        role = discord.utils.get(guild.roles, name=role_name)
         if not role:
             continue
 
         week = generate_week_schedule()
-        message = f"📢【{week_name} {level}未投票催促】\n\n"
-        for member in role.members:
-            needs_remind = False
+        message = f"📢【{week_name} {level} 1週間前催促】\n\n"
+
+        for date in week:
             for msg_id, data in vote_data.items():
-                for date in week:
-                    if date in data and not any(member.display_name in v for v in data[date].values()):
-                        needs_remind = True
-                        break
-            if needs_remind:
-                message += f"{member.mention} "
+                if data.get("channel") != target_channel.id:
+                    continue
+                if date not in data:
+                    continue
+                date_votes = data[date]
 
-        if message.strip() != f"📢【{week_name} {level}未投票催促】":
-            await target_channel.send(message + "\n")
+                unvoted_members = []
+                for member in role.members:
+                    if all(member.display_name not in v for v in date_votes.values()):
+                        unvoted_members.append(member.mention)
 
-    print("✅ Step3: 1週間前未投票者催促送信完了。")
+                if unvoted_members:
+                    message += f"{date}\n" + ", ".join(unvoted_members) + "\n\n"
+
+        if message.strip():
+            await target_channel.send(message)
+
+    print("✅ Step3: 1週間前催促送信完了。")
 
 # ====== テスト用 Scheduler ======
 @bot.event
@@ -223,11 +233,10 @@ async def on_ready():
     print(f"✅ ログイン完了: {bot.user}")
     scheduler = AsyncIOScheduler(timezone=JST)
     now = datetime.datetime.now(JST)
-    step1_time = now.replace(hour=15, minute=33, second=0, microsecond=0)
-    step2_time = now.replace(hour=15, minute=35, second=0, microsecond=0)
-    step3_time = now.replace(hour=15, minute=36, second=0, microsecond=0)
+    step1_time = now.replace(hour=16, minute=6, second=0, microsecond=0)
+    step2_time = now.replace(hour=16, minute=8, second=0, microsecond=0)
+    step3_time = now.replace(hour=16, minute=9, second=0, microsecond=0)
 
-    # 過ぎてたらスケジュール追加しない
     if step1_time > now:
         scheduler.add_job(send_step1_schedule, DateTrigger(run_date=step1_time))
     if step2_time > now:
