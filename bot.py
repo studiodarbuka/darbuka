@@ -45,9 +45,8 @@ def get_schedule_start():
     return target.replace(hour=0, minute=0, second=0, microsecond=0)
 
 # ====== 日本語曜日で一週間生成 ======
-def generate_week_schedule(start=None):
-    if not start:
-        start = get_schedule_start()
+def generate_week_schedule():
+    start = get_schedule_start()
     weekday_jp = ["月","火","水","木","金","土","日"]
     return [
         f"{(start + datetime.timedelta(days=i)).strftime('%Y-%m-%d')} ({weekday_jp[(start + datetime.timedelta(days=i)).weekday()]})"
@@ -77,7 +76,7 @@ class VoteView(discord.ui.View):
         if self.date_str not in vote_data[message_id]:
             vote_data[message_id][self.date_str] = {"参加(🟢)": [], "オンライン可(🟡)": [], "不可(🔴)": []}
 
-        # トグル式
+        # トグル式：同じボタンを押したら無効化
         current_status = None
         for k, v in vote_data[message_id][self.date_str].items():
             if user_name in v:
@@ -140,7 +139,7 @@ async def send_step1_schedule():
             new_ch = await guild.create_text_channel(ch_name, category=category)
             channels[level] = new_ch
 
-    week = generate_week_schedule(start)
+    week = generate_week_schedule()
     for level, ch in channels.items():
         for date in week:
             embed = discord.Embed(title=f"📅 {level} - 三週間後の予定 {date}")
@@ -168,7 +167,7 @@ async def send_step2_remind():
         if not target_channel:
             continue
 
-        week = generate_week_schedule(start)
+        week = generate_week_schedule()
         message = f"📢【{week_name} {level}リマインド】\n\n📅 日程ごとの参加状況：\n\n"
         for date in week:
             for msg_id, data in vote_data.items():
@@ -196,15 +195,12 @@ async def send_step3_remind():
         if not target_channel:
             continue
 
-        role_name = f"{level}"  # 初級/中級のロール名と同じにする
-        role = discord.utils.get(guild.roles, name=role_name)
+        role = discord.utils.get(guild.roles, name=level)
         if not role:
             continue
 
-        week = generate_week_schedule(start)
+        week = generate_week_schedule()
         message = f"📢【{week_name} {level}未投票催促】\n\n"
-
-        # 参加していないメンバーをメンション
         for member in role.members:
             needs_remind = False
             for msg_id, data in vote_data.items():
@@ -217,20 +213,21 @@ async def send_step3_remind():
 
         if message.strip() != f"📢【{week_name} {level}未投票催促】":
             await target_channel.send(message + "\n")
+
     print("✅ Step3: 1週間前未投票者催促送信完了。")
 
-# ====== Scheduler設定 ======
+# ====== テスト用 Scheduler ======
 @bot.event
 async def on_ready():
     load_votes()
     print(f"✅ ログイン完了: {bot.user}")
     scheduler = AsyncIOScheduler(timezone=JST)
     now = datetime.datetime.now(JST)
-    step1_time = now.replace(hour=14, minute=55, second=0, microsecond=0)
-    step2_time = now.replace(hour=14, minute=57, second=0, microsecond=0)
-    step3_time = now.replace(hour=14, minute=59, second=0, microsecond=0)
+    step1_time = now.replace(hour=15, minute=33, second=0, microsecond=0)
+    step2_time = now.replace(hour=15, minute=35, second=0, microsecond=0)
+    step3_time = now.replace(hour=15, minute=36, second=0, microsecond=0)
 
-    # 過ぎてたら追加しない
+    # 過ぎてたらスケジュール追加しない
     if step1_time > now:
         scheduler.add_job(send_step1_schedule, DateTrigger(run_date=step1_time))
     if step2_time > now:
