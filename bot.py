@@ -209,9 +209,9 @@ async def on_ready():
     print(f"✅ ログイン完了: {bot.user}")
     scheduler = AsyncIOScheduler(timezone=JST)
     now = datetime.datetime.now(JST)
-    step1_time = now.replace(hour=21, minute=11, second=0, microsecond=0)
-    step2_time = now.replace(hour=21, minute=12, second=0, microsecond=0)
-    step3_time = now.replace(hour=21, minute=13, second=0, microsecond=0)
+    step1_time = now.replace(hour=21, minute=30, second=0, microsecond=0)
+    step2_time = now.replace(hour=21, minute=31, second=0, microsecond=0)
+    step3_time = now.replace(hour=21, minute=32, second=0, microsecond=0)
 
     scheduler.add_job(send_step1_schedule, DateTrigger(run_date=step1_time))
     scheduler.add_job(send_step2_remind, DateTrigger(run_date=step2_time))
