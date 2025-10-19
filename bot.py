@@ -314,9 +314,9 @@ async def on_ready():
 
     now = datetime.datetime.now(JST)
     # ===== 固定時刻スケジュール（テスト用） =====
-    three_week_test = now.replace(hour=2, minute=1, second=0, microsecond=0)  # Step1
-    two_week_test   = now.replace(hour=2, minute=2, second=0, microsecond=0)  # Step2
-    one_week_test   = now.replace(hour=2, minute=3, second=0, microsecond=0)  # Step3
+    three_week_test = now.replace(hour=2, minute=5, second=0, microsecond=0)  # Step1
+    two_week_test   = now.replace(hour=2, minute=6, second=0, microsecond=0)  # Step2
+    one_week_test   = now.replace(hour=2, minute=7, second=0, microsecond=0)  # Step3
 
     scheduler.add_job(send_step1_schedule, DateTrigger(run_date=three_week_test))
     scheduler.add_job(send_step2_remind,   DateTrigger(run_date=two_week_test))
