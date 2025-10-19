@@ -1,222 +1,256 @@
 import os
 import discord
-from discord import app_commands
 from discord.ext import commands
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.date import DateTrigger
 import datetime
 import pytz
 import json
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.date import DateTrigger
 
-# ===== 基本設定 =====
-TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-GUILD_ID = int(os.getenv("GUILD_ID", 0))
-JST = pytz.timezone("Asia/Tokyo")
-VOTE_FILE = "votes.json"
-
+# ====== 基本設定 ======
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
-tree = bot.tree
 
-# ===== データ保存 =====
+# ====== 永続保存 ======
+PERSISTENT_DIR = "./data"
+os.makedirs(PERSISTENT_DIR, exist_ok=True)
+VOTE_FILE = os.path.join(PERSISTENT_DIR, "votes.json")
+
+# ====== タイムゾーン ======
+JST = pytz.timezone("Asia/Tokyo")
+
+# ====== 投票データ ======
+vote_data = {}
+
 def load_votes():
+    global vote_data
     if os.path.exists(VOTE_FILE):
         with open(VOTE_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
+            vote_data = json.load(f)
+    else:
+        vote_data = {}
 
-def save_votes(data):
+def save_votes():
     with open(VOTE_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+        json.dump(vote_data, f, ensure_ascii=False, indent=2)
 
-# ===== 投票UI =====
+# ====== 三週間後・日曜始まり週を算出 ======
+def get_schedule_start():
+    today = datetime.datetime.now(JST)
+    days_since_sunday = (today.weekday() + 1) % 7
+    this_sunday = today - datetime.timedelta(days=days_since_sunday)
+    target = this_sunday + datetime.timedelta(weeks=3)
+    return target.replace(hour=0, minute=0, second=0, microsecond=0)
+
+# ====== 日本語曜日で一週間生成 ======
+def generate_week_schedule():
+    start = get_schedule_start()
+    weekday_jp = ["月","火","水","木","金","土","日"]
+    return [
+        f"{(start + datetime.timedelta(days=i)).strftime('%Y-%m-%d')} ({weekday_jp[(start + datetime.timedelta(days=i)).weekday()]})"
+        for i in range(7)
+    ]
+
+# ====== 月第N週の文字列を返す ======
+def get_week_name(date):
+    month = date.month
+    first_day = date.replace(day=1)
+    first_sunday = first_day + datetime.timedelta(days=(6 - first_day.weekday()) % 7)
+    week_number = ((date - first_sunday).days // 7) + 1
+    return f"{month}月第{week_number}週"
+
+# ====== 投票ボタン付きビュー（トグル式、user_id管理） ======
 class VoteView(discord.ui.View):
     def __init__(self, date_str):
         super().__init__(timeout=None)
         self.date_str = date_str
 
-    async def handle_vote(self, interaction: discord.Interaction, vote_type: str):
-        votes = load_votes()
-        date = self.date_str
-        user = interaction.user.name
+    async def handle_vote(self, interaction: discord.Interaction, status: str):
+        message_id = str(interaction.message.id)
+        user_id = str(interaction.user.id)
+        user_name = interaction.user.display_name
 
-        if date not in votes:
-            votes[date] = {"参加": [], "オンライン可": [], "不可": []}
+        if message_id not in vote_data:
+            vote_data[message_id] = {}
+        if self.date_str not in vote_data[message_id]:
+            vote_data[message_id][self.date_str] = {"参加(🟢)": {}, "オンライン可(🟡)": {}, "不可(🔴)": {}}
 
-        # 二重押しで解除できるように
-        if user in votes[date][vote_type]:
-            votes[date][vote_type].remove(user)
-            msg = f"{date} の「{vote_type}」投票を取り消しました。"
+        # トグル式：同じボタンを押したら無効化
+        current_status = None
+        for k, v in vote_data[message_id][self.date_str].items():
+            if user_id in v:
+                current_status = k
+                break
+
+        if current_status == status:
+            del vote_data[message_id][self.date_str][status][user_id]
         else:
-            for key in votes[date]:
-                if user in votes[date][key]:
-                    votes[date][key].remove(user)
-            votes[date][vote_type].append(user)
-            msg = f"{date} に「{vote_type}」として投票しました。"
+            for v_dict in vote_data[message_id][self.date_str].values():
+                if user_id in v_dict:
+                    del v_dict[user_id]
+            vote_data[message_id][self.date_str][status][user_id] = user_name
 
-        save_votes(votes)
-        await interaction.response.send_message(msg, ephemeral=True)
+        save_votes()
 
-    @discord.ui.button(label="🟢参加", style=discord.ButtonStyle.success)
-    async def yes(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.handle_vote(interaction, "参加")
+        # Embed更新
+        embed = discord.Embed(title=f"【予定候補】{self.date_str}")
+        for k, v in vote_data[message_id][self.date_str].items():
+            embed.add_field(name=f"{k} ({len(v)}人)", value="\n".join(v.values()) if v else "0人", inline=False)
+        await interaction.response.edit_message(embed=embed, view=self)
 
-    @discord.ui.button(label="🟡オンライン可", style=discord.ButtonStyle.primary)
-    async def maybe(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.handle_vote(interaction, "オンライン可")
+    @discord.ui.button(label="参加(🟢)", style=discord.ButtonStyle.success)
+    async def yes_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.handle_vote(interaction, "参加(🟢)")
 
-    @discord.ui.button(label="🔴不可", style=discord.ButtonStyle.danger)
-    async def no(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.handle_vote(interaction, "不可")
+    @discord.ui.button(label="オンライン可(🟡)", style=discord.ButtonStyle.primary)
+    async def maybe_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.handle_vote(interaction, "オンライン可(🟡)")
 
-# ===== Step1（投票開始） =====
+    @discord.ui.button(label="不可(🔴)", style=discord.ButtonStyle.danger)
+    async def no_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.handle_vote(interaction, "不可(🔴)")
+
+# ====== Step1: チャンネル作成 + 投票送信 ======
 async def send_step1_schedule():
-    guild = bot.get_guild(GUILD_ID)
-    if not guild:
-        print("❌ ギルドが見つかりません。")
+    await bot.wait_until_ready()
+    guild = bot.guilds[0]
+
+    category_beginner = discord.utils.get(guild.categories, name="初級")
+    category_intermediate = discord.utils.get(guild.categories, name="中級")
+    if not category_beginner or not category_intermediate:
+        print("⚠️ カテゴリ「初級」「中級」が見つかりません。")
         return
 
-    for level_name in ["初級", "中級"]:
-        channel = discord.utils.get(guild.text_channels, name=level_name)
-        if not channel:
-            print(f"⚠ チャンネル「{level_name}」が見つかりません。")
-            continue
+    start = get_schedule_start()
+    week_name = get_week_name(start)
 
-        now = datetime.datetime.now(JST)
-        target_start = now + datetime.timedelta(weeks=3)
-        start_of_week = target_start - datetime.timedelta(days=target_start.weekday())
+    ch_names = {
+        "初級": f"{week_name}-初級",
+        "中級": f"{week_name}-中級"
+    }
 
-        embed = discord.Embed(
-            title=f"📅【{start_of_week.strftime('%m月第%W週')} {level_name} 投票開始】",
-            description="以下の日付で参加可否を選んでください！",
-            color=0x2ECC71
-        )
+    channels = {}
+    for level, ch_name in ch_names.items():
+        existing = discord.utils.get(guild.text_channels, name=ch_name)
+        if existing:
+            channels[level] = existing
+        else:
+            category = category_beginner if level == "初級" else category_intermediate
+            new_ch = await guild.create_text_channel(ch_name, category=category)
+            channels[level] = new_ch
 
-        for i in range(7):
-            day = start_of_week + datetime.timedelta(days=i)
-            date_str = (
-                day.strftime("%Y-%m-%d (%a)")
-                .replace("(Sun)", "(日)").replace("(Mon)", "(月)")
-                .replace("(Tue)", "(火)").replace("(Wed)", "(水)")
-                .replace("(Thu)", "(木)").replace("(Fri)", "(金)")
-                .replace("(Sat)", "(土)")
-            )
-            view = VoteView(date_str)
-            await channel.send(embed=discord.Embed(title=date_str, color=0x95A5A6), view=view)
+    week = generate_week_schedule()
+    for level, ch in channels.items():
+        for date in week:
+            embed = discord.Embed(title=f"📅 {level} - 三週間後の予定 {date}")
+            embed.add_field(name="参加(🟢)", value="0人", inline=False)
+            embed.add_field(name="オンライン可(🟡)", value="0人", inline=False)
+            embed.add_field(name="不可(🔴)", value="0人", inline=False)
+            view = VoteView(date)
+            msg = await ch.send(embed=embed, view=view)
+            vote_data[str(msg.id)] = {"channel": ch.id, date: {"参加(🟢)": {}, "オンライン可(🟡)": {}, "不可(🔴)": {}}}
+            save_votes()
 
-        await channel.send(f"{level_name} の投票を開始しました！")
+    print("✅ Step1: 初級・中級チャンネルへ三週間後スケジュール投稿完了。")
 
-# ===== Step2（2週間前リマインド） =====
+# ====== Step2: 二週間前リマインド（テキスト形式） ======
 async def send_step2_remind():
-    guild = bot.get_guild(GUILD_ID)
-    if not guild:
-        print("❌ ギルドが見つかりません。")
-        return
+    await bot.wait_until_ready()
+    guild = bot.guilds[0]
 
-    votes = load_votes()
-    now = datetime.datetime.now(JST)
-    target_start = now + datetime.timedelta(weeks=1)
-    start_of_week = target_start - datetime.timedelta(days=target_start.weekday())
+    start = get_schedule_start()
+    week_name = get_week_name(start)
 
-    for level_name in ["初級", "中級"]:
-        channel = discord.utils.get(guild.text_channels, name=level_name)
-        if not channel:
+    for level in ["初級", "中級"]:
+        ch_name = f"{week_name}-{level}"
+        target_channel = discord.utils.get(guild.text_channels, name=ch_name)
+        if not target_channel:
             continue
 
-        embed = discord.Embed(
-            title=f"📢【{start_of_week.strftime('%m月第%W週')} {level_name}リマインド】",
-            color=0x3498DB
-        )
+        week = generate_week_schedule()
+        message = f"📢【{week_name} {level}リマインド】\n\n📅 日程ごとの参加状況：\n\n"
+        for date in week:
+            for msg_id, data in vote_data.items():
+                if data.get("channel") != target_channel.id:
+                    continue
+                if date not in data:
+                    continue
+                date_votes = data[date]
+                message += f"{date}\n"
+                message += f"参加(🟢) " + (", ".join(date_votes["参加(🟢)"].values()) if date_votes["参加(🟢)"] else "なし") + "\n"
+                message += f"オンライン可(🟡) " + (", ".join(date_votes["オンライン可(🟡)"].values()) if date_votes["オンライン可(🟡)"] else "なし") + "\n"
+                message += f"不可(🔴) " + (", ".join(date_votes["不可(🔴)"].values()) if date_votes["不可(🔴)"] else "なし") + "\n\n"
+        await target_channel.send(message)
 
-        for i in range(7):
-            day = start_of_week + datetime.timedelta(days=i)
-            date_str = (
-                day.strftime("%Y-%m-%d (%a)")
-                .replace("(Sun)", "(日)").replace("(Mon)", "(月)")
-                .replace("(Tue)", "(火)").replace("(Wed)", "(水)")
-                .replace("(Thu)", "(木)").replace("(Fri)", "(金)")
-                .replace("(Sat)", "(土)")
-            )
-            v = votes.get(date_str, {"参加": [], "オンライン可": [], "不可": []})
-            embed.add_field(
-                name=date_str,
-                value=f"🟢参加: {', '.join(v['参加']) or 'なし'}\n🟡オンライン可: {', '.join(v['オンライン可']) or 'なし'}\n🔴不可: {', '.join(v['不可']) or 'なし'}",
-                inline=False
-            )
+    print("✅ Step2: 二週間前リマインド送信完了。")
 
-        await channel.send(embed=embed)
-
-# ===== Step3（1週間前催促） =====
+# ====== Step3: 1週間前催促（投票なしユーザーメンション、user_id基準） ======
 async def send_step3_remind():
-    guild = bot.get_guild(GUILD_ID)
-    if not guild:
-        print("❌ ギルドが見つかりません。")
-        return
+    await bot.wait_until_ready()
+    guild = bot.guilds[0]
 
-    votes = load_votes()
-    now = datetime.datetime.now(JST)
-    target_start = now + datetime.timedelta(days=7)
-    start_of_week = target_start - datetime.timedelta(days=target_start.weekday())
+    start = get_schedule_start()
+    week_name = get_week_name(start)
 
-    for level_name in ["初級", "中級"]:
-        channel = discord.utils.get(guild.text_channels, name=level_name)
-        role = discord.utils.get(guild.roles, name=level_name)
-        if not channel or not role:
+    for level in ["初級", "中級"]:
+        ch_name = f"{week_name}-{level}"
+        target_channel = discord.utils.get(guild.text_channels, name=ch_name)
+        if not target_channel:
             continue
 
-        not_voted_users = {}
-        for member in guild.members:
-            if role not in member.roles:
-                continue
-
-            not_voted_days = []
-            for i in range(7):
-                day = start_of_week + datetime.timedelta(days=i)
-                date_str = (
-                    day.strftime("%Y-%m-%d (%a)")
-                    .replace("(Sun)", "(日)").replace("(Mon)", "(月)")
-                    .replace("(Tue)", "(火)").replace("(Wed)", "(水)")
-                    .replace("(Thu)", "(木)").replace("(Fri)", "(金)")
-                    .replace("(Sat)", "(土)")
-                )
-                v = votes.get(date_str, {"参加": [], "オンライン可": [], "不可": []})
-                if (
-                    member.name not in v["参加"]
-                    and member.name not in v["オンライン可"]
-                    and member.name not in v["不可"]
-                ):
-                    not_voted_days.append(date_str)
-
-            if not_voted_days:
-                not_voted_users[member] = not_voted_days
-
-        if not not_voted_users:
-            await channel.send(f"✅【{level_name}】全員投票済みです！")
+        role = discord.utils.get(guild.roles, name=level)  # ロール名を直接使用
+        if not role:
             continue
 
-        msg = f"📢【{start_of_week.strftime('%m月第%W週')} {level_name} 未投票催促】\n以下のメンバーはまだ投票していません：\n\n"
-        for member, days in not_voted_users.items():
-            msg += f"🔸 {member.mention}\n未投票日：{', '.join(days)}\n"
+        week = generate_week_schedule()
+        message = f"📢【{week_name} {level} 1週間前催促】\n\n"
 
-        await channel.send(msg)
+        for date in week:
+            for msg_id, data in vote_data.items():
+                if data.get("channel") != target_channel.id:
+                    continue
+                if date not in data:
+                    continue
+                date_votes = data[date]
 
-# ===== 起動時（Render対応） =====
+                unvoted_members = []
+                for member in role.members:
+                    voted_ids = set()
+                    for v_dict in date_votes.values():
+                        voted_ids.update(v_dict.keys())
+                    if str(member.id) not in voted_ids:
+                        unvoted_members.append(member.mention)
+
+                if unvoted_members:
+                    message += f"{date}\n" + ", ".join(unvoted_members) + "\n\n"
+
+        if message.strip():
+            await target_channel.send(message)
+
+    print("✅ Step3: 1週間前催促送信完了。")
+
+# ====== Scheduler ======
+scheduler = AsyncIOScheduler(timezone=JST)
+
 @bot.event
 async def on_ready():
     load_votes()
     print(f"✅ ログイン完了: {bot.user}")
-    scheduler = AsyncIOScheduler(timezone=JST)
-    now = datetime.datetime.now(JST)
-    step1_time = now.replace(hour=21, minute=30, second=0, microsecond=0)
-    step2_time = now.replace(hour=21, minute=31, second=0, microsecond=0)
-    step3_time = now.replace(hour=21, minute=32, second=0, microsecond=0)
 
-    scheduler.add_job(send_step1_schedule, DateTrigger(run_date=step1_time))
-    scheduler.add_job(send_step2_remind, DateTrigger(run_date=step2_time))
-    scheduler.add_job(send_step3_remind, DateTrigger(run_date=step3_time))
+    now = datetime.datetime.now(JST)
+    step1_time = now.replace(hour=21, minute=51, second=0, microsecond=0)
+    step2_time = now.replace(hour=21, minute=52, second=0, microsecond=0)
+    step3_time = now.replace(hour=21, minute=53, second=0, microsecond=0)
+
+    if step1_time > now:
+        scheduler.add_job(send_step1_schedule, DateTrigger(run_date=step1_time))
+    if step2_time > now:
+        scheduler.add_job(send_step2_remind, DateTrigger(run_date=step2_time))
+    if step3_time > now:
+        scheduler.add_job(send_step3_remind, DateTrigger(run_date=step3_time))
 
     scheduler.start()
 
-bot.run(TOKEN)
+bot.run(os.getenv("DISCORD_BOT_TOKEN"))
