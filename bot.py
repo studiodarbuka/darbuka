@@ -15,16 +15,13 @@ intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
+GUILD_ID = int(os.getenv("GUILD_ID"))
+
 # ====== 永続保存 ======
 PERSISTENT_DIR = "./data"
 os.makedirs(PERSISTENT_DIR, exist_ok=True)
 VOTE_FILE = os.path.join(PERSISTENT_DIR, "votes.json")
-LOCATIONS_FILE = os.path.join(PERSISTENT_DIR, "locations.json")
 
-# ====== タイムゾーン ======
-JST = pytz.timezone("Asia/Tokyo")
-
-# ====== 投票データ ======
 vote_data = {}
 
 def load_votes():
@@ -39,7 +36,9 @@ def save_votes():
     with open(VOTE_FILE, "w", encoding="utf-8") as f:
         json.dump(vote_data, f, ensure_ascii=False, indent=2)
 
-# ====== 日付計算 ======
+# ====== タイムゾーン・日付計算 ======
+JST = pytz.timezone("Asia/Tokyo")
+
 def get_schedule_start():
     today = datetime.datetime.now(JST)
     days_since_sunday = (today.weekday() + 1) % 7
@@ -62,7 +61,7 @@ def get_week_name(date):
     week_number = ((date - first_sunday).days // 7) + 1
     return f"{month}月第{week_number}週"
 
-# ====== 投票ビュー（Step4自動通知対応） ======
+# ====== VoteView ======
 class VoteView(discord.ui.View):
     def __init__(self, date_str):
         super().__init__(timeout=None)
@@ -113,6 +112,9 @@ class VoteView(discord.ui.View):
             print("⚠️ 『人数確定通知所』チャンネルが見つかりません。")
             return
 
+        role = discord.utils.get(guild.roles, name="講師")
+        mention_str = role.mention if role else "@講師"
+
         level = "初級" if "初級" in interaction.channel.name else "中級"
         participants_list = ", ".join(participants.values())
 
@@ -122,7 +124,7 @@ class VoteView(discord.ui.View):
                 f"日程: {self.date_str}\n"
                 f"級: {level}\n"
                 f"参加者 ({len(participants)}人): {participants_list}\n\n"
-                f"<@&講師> さん、スタジオを抑えてください。\n"
+                f"{mention_str} さん、スタジオを抑えてください。\n"
                 f"確定または不確定が決まったら、`/確定` または `/不確定` コマンドで通知してください。"
             ),
             color=0x00BFFF
@@ -141,7 +143,7 @@ class VoteView(discord.ui.View):
     async def no_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.handle_vote(interaction, "不可(🔴)")
 
-# ====== Step1～Step3 ======
+# ====== Step1～3（テスト用起動） ======
 async def send_step1_schedule():
     await bot.wait_until_ready()
     guild = bot.guilds[0]
@@ -277,7 +279,28 @@ async def unconfirm_event(interaction: discord.Interaction, 級: str, 日付: st
     else:
         await interaction.response.send_message("⚠️ 対象チャンネルが見つかりません。", ephemeral=True)
 
-# ====== Scheduler（Step1～3テスト起動） ======
+# ====== /event 突発イベント ======
+@tree.command(name="event", description="突発イベントを作成して投票可能")
+@app_commands.describe(級="初級 or 中級", 日付="例: 2025-11-09", タイトル="イベントタイトル")
+async def create_event(interaction: discord.Interaction, 級: str, 日付: str, タイトル: str):
+    guild = interaction.guild
+    target_ch = discord.utils.find(lambda c: 級 in c.name, guild.text_channels)
+    if not target_ch:
+        await interaction.response.send_message("⚠️ 対象チャンネルが見つかりません。", ephemeral=True)
+        return
+
+    embed = discord.Embed(title=f"📅 {級} - 突発イベント {日付}", description=タイトル)
+    embed.add_field(name="参加(🟢)", value="0人", inline=False)
+    embed.add_field(name="オンライン可(🟡)", value="0人", inline=False)
+    embed.add_field(name="不可(🔴)", value="0人", inline=False)
+
+    view = VoteView(日付)
+    msg = await target_ch.send(embed=embed, view=view)
+    vote_data[str(msg.id)] = {"channel": target_ch.id, 日付: {"参加(🟢)": {}, "オンライン可(🟡)": {}, "不可(🔴)": {}}}
+    save_votes()
+    await interaction.response.send_message("✅ 突発イベントを作成しました。", ephemeral=True)
+
+# ====== Scheduler（テスト用） ======
 scheduler = AsyncIOScheduler(timezone=JST)
 
 @bot.event
@@ -291,9 +314,9 @@ async def on_ready():
 
     now = datetime.datetime.now(JST)
     # ===== 固定時刻スケジュール（テスト用） =====
-    three_week_test = now.replace(hour=1, minute=50, second=0, microsecond=0)  # Step1
-    two_week_test   = now.replace(hour=1, minute=51, second=0, microsecond=0)  # Step2
-    one_week_test   = now.replace(hour=1, minute=52, second=0, microsecond=0)  # Step3
+    three_week_test = now.replace(hour=2, minute=1, second=0, microsecond=0)  # Step1
+    two_week_test   = now.replace(hour=2, minute=2, second=0, microsecond=0)  # Step2
+    one_week_test   = now.replace(hour=2, minute=3, second=0, microsecond=0)  # Step3
 
     scheduler.add_job(send_step1_schedule, DateTrigger(run_date=three_week_test))
     scheduler.add_job(send_step2_remind,   DateTrigger(run_date=two_week_test))
@@ -302,6 +325,7 @@ async def on_ready():
     scheduler.start()
     print(f"✅ Logged in as {bot.user}")
     print(f"✅ Scheduler started (Test mode). Step1～3は指定時刻に実行されます。")
+
 
 # ====== Bot起動 ======
 bot.run(os.getenv("DISCORD_BOT_TOKEN"))
