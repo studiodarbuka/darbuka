@@ -136,7 +136,7 @@ class VoteView(discord.ui.View):
     async def check_step4(self, interaction: discord.Interaction, message_id: str):
         data = vote_data[message_id]
         participants = list(data[self.date_str]["参加(🟢)"].keys())
-        if len(participants) < 3:
+        if len(participants) < 1:
             return
 
         guild = interaction.guild
