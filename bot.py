@@ -278,9 +278,9 @@ async def on_ready():
 
     scheduler = AsyncIOScheduler(timezone=JST)
     now = datetime.datetime.now(JST)
-    step1_time = now.replace(hour=22, minute=53, second=0, microsecond=0)
-    step2_time = now.replace(hour=16, minute=54, second=0, microsecond=0)
-    step3_time = now.replace(hour=16, minute=55, second=0, microsecond=0)
+    step1_time = now.replace(hour=23, minute=2, second=0, microsecond=0)
+    step2_time = now.replace(hour=23, minute=3, second=0, microsecond=0)
+    step3_time = now.replace(hour=23, minute=4, second=0, microsecond=0)
 
     if step1_time > now:
         scheduler.add_job(lambda: asyncio.create_task(send_step1_schedule()), DateTrigger(run_date=step1_time))
