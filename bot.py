@@ -286,9 +286,9 @@ async def on_ready():
     print(f"✅ ログイン完了: {bot.user}")
 
     now = datetime.datetime.now(JST)
-    step1_time = now.replace(hour=22, minute=25, second=0, microsecond=0)
-    step2_time = now.replace(hour=16, minute=26, second=0, microsecond=0)
-    step3_time = now.replace(hour=16, minute=28, second=0, microsecond=0)
+    step1_time = now.replace(hour=22, minute=30, second=0, microsecond=0)
+    step2_time = now.replace(hour=16, minute=31, second=0, microsecond=0)
+    step3_time = now.replace(hour=16, minute=32, second=0, microsecond=0)
 
     if step1_time > now:
         scheduler.add_job(send_step1_schedule, DateTrigger(run_date=step1_time))
