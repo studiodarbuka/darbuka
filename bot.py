@@ -1,6 +1,6 @@
 import os
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord import app_commands
 import datetime
 import pytz
@@ -19,12 +19,10 @@ tree = bot.tree
 PERSISTENT_DIR = "./data"
 os.makedirs(PERSISTENT_DIR, exist_ok=True)
 VOTE_FILE = os.path.join(PERSISTENT_DIR, "votes.json")
+CONFIRM_FILE = os.path.join(PERSISTENT_DIR, "confirmed.json")
 
-# ====== タイムゾーン ======
-JST = pytz.timezone("Asia/Tokyo")
-
-# ====== 投票データ ======
 vote_data = {}
+confirmed_data = {}
 
 def load_votes():
     global vote_data
@@ -37,6 +35,21 @@ def load_votes():
 def save_votes():
     with open(VOTE_FILE, "w", encoding="utf-8") as f:
         json.dump(vote_data, f, ensure_ascii=False, indent=2)
+
+def load_confirmed():
+    global confirmed_data
+    if os.path.exists(CONFIRM_FILE):
+        with open(CONFIRM_FILE, "r", encoding="utf-8") as f:
+            confirmed_data = json.load(f)
+    else:
+        confirmed_data = {}
+
+def save_confirmed():
+    with open(CONFIRM_FILE, "w", encoding="utf-8") as f:
+        json.dump(confirmed_data, f, ensure_ascii=False, indent=2)
+
+# ====== タイムゾーン ======
+JST = pytz.timezone("Asia/Tokyo")
 
 # ====== スケジュール生成 ======
 def get_schedule_start():
@@ -105,7 +118,7 @@ class VoteView(discord.ui.View):
     async def no_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.handle_vote(interaction, "不可(🔴)")
 
-# ====== Step1: チャンネル作成 + 投票送信 ======
+# ====== Step1: スケジュール投稿 ======
 async def send_step1_schedule():
     await bot.wait_until_ready()
     guild = bot.guilds[0]
@@ -200,11 +213,36 @@ async def send_step3_confirm():
             await target_channel.send(message)
     print("✅ Step3: 一週間前催促完了")
 
-# ====== Step4: /confirmコマンド ======
+# ====== Step4: 自動通知 + /confirm ======
 class Confirm(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.check_step4.start()
 
+    # ====== 自動 Step4 チェック（1人以上参加で通知）=====
+    @tasks.loop(minutes=10)
+    async def check_step4(self):
+        await bot.wait_until_ready()
+        guild = bot.guilds[0]
+        week = generate_week_schedule()
+        for level in ["初級", "中級"]:
+            ch_name = f"{get_week_name(get_schedule_start())}-{level}"
+            target_channel = discord.utils.get(guild.text_channels, name=ch_name)
+            if not target_channel: continue
+            teacher_role = discord.utils.get(guild.roles, name="講師")
+            mention = teacher_role.mention if teacher_role else ""
+            for date in week:
+                for msg_id, data in vote_data.items():
+                    if data.get("channel") != target_channel.id: continue
+                    if date not in data: continue
+                    participants = list(data[date]["参加(🟢)"].values())
+                    if len(participants) >= 1 and f"{level}_{date}" not in confirmed_data:
+                        msg_text = f"{date} の {level}クラスは参加者 {len(participants)}人 ({', '.join(participants)}) です。\nスタジオを抑えてください。"
+                        await target_channel.send(content=mention, embed=discord.Embed(description=msg_text))
+                        confirmed_data[f"{level}_{date}"] = True
+                        save_confirmed()
+
+    # ====== /confirm コマンド ======
     @app_commands.command(name="confirm", description="スタジオ確定通知を送信")
     @app_commands.describe(level="クラス名（初級 or 中級）", date="候補日", place="スタジオ場所")
     async def confirm(self, interaction: discord.Interaction, level: str, date: str, place: str):
@@ -222,8 +260,11 @@ class Confirm(commands.Cog):
         mention = teacher_role.mention if teacher_role else ""
         msg_text = f"{date} の {level}クラスは参加者 {len(participants)}人 ({', '.join(participants)}) です。\n場所: {place}\nスタジオを抑えてください。"
         await target_channel.send(content=mention, embed=discord.Embed(description=msg_text))
+        confirmed_data[f"{level}_{date}"] = True
+        save_confirmed()
         await interaction.response.send_message("通知を送信しました。", ephemeral=True)
 
+    # ====== 候補日オートコンプリート ======
     @confirm.autocomplete('date')
     async def date_autocomplete(self, interaction: discord.Interaction, current: str):
         dates = set()
@@ -241,6 +282,7 @@ scheduler = AsyncIOScheduler(timezone=JST)
 @bot.event
 async def on_ready():
     load_votes()
+    load_confirmed()
     try:
         await tree.sync()
         print("✅ Slash Commands synced!")
@@ -248,9 +290,10 @@ async def on_ready():
         print(f"⚠ コマンド同期エラー: {e}")
 
     now = datetime.datetime.now(JST)
-    three_week_test = now.replace(hour=0, minute=40, second=0, microsecond=0)
-    two_week_test   = now.replace(hour=0, minute=41, second=0, microsecond=0)
-    one_week_test   = now.replace(hour=0, minute=42, second=0, microsecond=0)
+    # ===== 固定時刻スケジュール（テスト） =====
+    three_week_test = now.replace(hour=0, minute=47, second=0, microsecond=0)
+    two_week_test   = now.replace(hour=0, minute=48, second=0, microsecond=0)
+    one_week_test   = now.replace(hour=0, minute=49, second=0, microsecond=0)
 
     scheduler.add_job(send_step1_schedule, DateTrigger(run_date=three_week_test))
     scheduler.add_job(send_step2_remind,   DateTrigger(run_date=two_week_test))
@@ -258,7 +301,7 @@ async def on_ready():
 
     scheduler.start()
     print(f"✅ Logged in as {bot.user}")
-    print("✅ Scheduler started. Step1～3は指定時刻に実行されます。")
+    print("✅ Scheduler started. Step1～3 は指定時刻に実行されます。")
 
 # ====== Bot起動 ======
 bot.run(os.getenv("DISCORD_BOT_TOKEN"))
