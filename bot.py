@@ -125,7 +125,6 @@ async def send_step1_schedule():
     category_beginner = discord.utils.get(guild.categories, name="初級")
     category_intermediate = discord.utils.get(guild.categories, name="中級")
     if not category_beginner or not category_intermediate:
-        print("⚠ カテゴリ「初級」「中級」が見つかりません")
         return
 
     start = get_schedule_start()
@@ -152,7 +151,6 @@ async def send_step1_schedule():
             msg = await ch.send(embed=embed, view=view)
             vote_data[str(msg.id)] = {"channel": ch.id, date: {"参加(🟢)": {}, "オンライン可(🟡)": {}, "不可(🔴)": {}}}
             save_votes()
-    print("✅ Step1: 三週間後スケジュール投稿完了")
 
 async def send_step2_remind():
     await bot.wait_until_ready()
@@ -174,7 +172,6 @@ async def send_step2_remind():
                            "\nオンライン可(🟡): " + (", ".join(date_votes["オンライン可(🟡)"].values()) or "なし") + \
                            "\n不可(🔴): " + (", ".join(date_votes["不可(🔴)"].values()) or "なし") + "\n\n"
         await target_channel.send(message)
-    print("✅ Step2: 二週間前リマインド完了")
 
 async def send_step3_confirm():
     await bot.wait_until_ready()
@@ -208,9 +205,8 @@ async def send_step3_confirm():
         if all_voted:
             message = f"📢【{week_name} {level}】全員投票済みです。ありがとうございます！🎉"
         await target_channel.send(message)
-    print("✅ Step3: 1週間前催促完了")
 
-# ====== Step4 Cog（参加者確認＆確定通知） ======
+# ====== Step4 Cog ======
 class Confirm(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -228,7 +224,7 @@ class Confirm(commands.Cog):
                 for msg_id, data in vote_data.items():
                     if date not in data: continue
                     date_votes = data[date]
-                    if len(date_votes["参加(🟢)"]) >= 1:  # テスト1人以上
+                    if len(date_votes["参加(🟢)"]) >= 1:  # テスト用1人以上
                         participants = ", ".join(date_votes["参加(🟢)"].values())
                         content = f"📢【{level} {date}】参加者: {participants}\nスタジオを抑えてください。"
                         await notify_channel.send(content)
@@ -237,9 +233,7 @@ class Confirm(commands.Cog):
     async def before_check(self):
         await self.bot.wait_until_ready()
 
-bot.add_cog(Confirm(bot))
-
-# ====== Scheduler（Step1～3テスト用） ======
+# ====== Scheduler ======
 scheduler = AsyncIOScheduler(timezone=JST)
 
 @bot.event
@@ -248,28 +242,23 @@ async def on_ready():
     load_confirmed()
     try:
         await tree.sync()
-        print("✅ Slash Commands synced!")
     except Exception as e:
         print(f"⚠ コマンド同期エラー: {e}")
 
+    # Cog追加（非同期）
+    await bot.add_cog(Confirm(bot))
+
     now = datetime.datetime.now(JST)
     # ===== 固定時刻スケジュール =====
-    three_week_test = now.replace(hour=0, minute=55, second=0, microsecond=0)
-    two_week_test   = now.replace(hour=0, minute=56, second=0, microsecond=0)
-    one_week_test   = now.replace(hour=0, minute=57, second=0, microsecond=0)
+    three_week_test = now.replace(hour=1, minute=00, second=0, microsecond=0)
+    two_week_test   = now.replace(hour=1, minute=1, second=0, microsecond=0)
+    one_week_test   = now.replace(hour=1, minute=2, second=0, microsecond=0)
 
     scheduler.add_job(send_step1_schedule, DateTrigger(run_date=three_week_test))
     scheduler.add_job(send_step2_remind,   DateTrigger(run_date=two_week_test))
     scheduler.add_job(send_step3_confirm,  DateTrigger(run_date=one_week_test))
 
     scheduler.start()
-    print(f"✅ Logged in as {bot.user}")
-    print("✅ Scheduler started. Step1～3は指定時刻に実行されます")
-
-    # Cog内ループ起動
-    confirm_cog = bot.get_cog("Confirm")
-    if confirm_cog:
-        confirm_cog.check_step4.start()
 
 # ====== Bot起動 ======
 bot.run(os.getenv("DISCORD_BOT_TOKEN"))
