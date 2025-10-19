@@ -162,9 +162,9 @@ async def on_ready():
 
     loop = asyncio.get_running_loop()
     now = datetime.datetime.now(JST)
-    step1_time = now.replace(hour=23, minute=17, second=0, microsecond=0)
-    step2_time = now.replace(hour=23, minute=18, second=0, microsecond=0)
-    step3_time = now.replace(hour=23, minute=18, second=30, microsecond=0)
+    step1_time = now.replace(hour=23, minute=20, second=0, microsecond=0)
+    step2_time = now.replace(hour=23, minute=21, second=0, microsecond=0)
+    step3_time = now.replace(hour=23, minute=22, second=30, microsecond=0)
 
     def schedule_coroutine(coro_func):
         asyncio.run_coroutine_threadsafe(coro_func(), loop)
