@@ -105,7 +105,7 @@ class VoteView(discord.ui.View):
     async def no_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.handle_vote(interaction, "不可(🔴)")
 
-# ====== Step1: チャンネル作成 + 投票 ======
+# ====== Step1: チャンネル作成 + 投票送信 ======
 async def send_step1_schedule():
     await bot.wait_until_ready()
     guild = bot.guilds[0]
@@ -198,7 +198,7 @@ async def send_step3_confirm():
             message = f"📢【{week_name} {level}】全員投票済みです。ありがとうございます！🎉"
         if message.strip():
             await target_channel.send(message)
-    print("✅ Step3: 1週間前催促完了")
+    print("✅ Step3: 一週間前催促完了")
 
 # ====== Step4: /confirmコマンド ======
 class Confirm(commands.Cog):
@@ -226,7 +226,12 @@ class Confirm(commands.Cog):
 
     @confirm.autocomplete('date')
     async def date_autocomplete(self, interaction: discord.Interaction, current: str):
-        return [app_commands.Choice(name=d, value=d) for d in generate_week_schedule() if current in d][:25]
+        dates = set()
+        for data in vote_data.values():
+            for key in data.keys():
+                if key == "channel": continue
+                dates.update(data[key].keys())
+        return [app_commands.Choice(name=d, value=d) for d in dates if current in d][:25]
 
 bot.add_cog(Confirm(bot))
 
@@ -243,10 +248,9 @@ async def on_ready():
         print(f"⚠ コマンド同期エラー: {e}")
 
     now = datetime.datetime.now(JST)
-    # ===== 固定時刻スケジュール（自由に変更可能） =====
-    three_week_test = now.replace(hour=0, minute=31, second=0, microsecond=0)
-    two_week_test   = now.replace(hour=0, minute=32, second=0, microsecond=0)
-    one_week_test   = now.replace(hour=0, minute=33, second=0, microsecond=0)
+    three_week_test = now.replace(hour=0, minute=36, second=0, microsecond=0)
+    two_week_test   = now.replace(hour=0, minute=37, second=0, microsecond=0)
+    one_week_test   = now.replace(hour=0, minute=38, second=0, microsecond=0)
 
     scheduler.add_job(send_step1_schedule, DateTrigger(run_date=three_week_test))
     scheduler.add_job(send_step2_remind,   DateTrigger(run_date=two_week_test))
@@ -254,7 +258,7 @@ async def on_ready():
 
     scheduler.start()
     print(f"✅ Logged in as {bot.user}")
-    print("✅ Scheduler started (Test mode). Step1～3は指定時刻に実行されます。")
+    print("✅ Scheduler started. Step1～3は指定時刻に実行されます。")
 
 # ====== Bot起動 ======
 bot.run(os.getenv("DISCORD_BOT_TOKEN"))
