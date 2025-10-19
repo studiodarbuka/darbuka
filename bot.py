@@ -103,7 +103,7 @@ class VoteView(discord.ui.View):
 
         # Step4自動通知
         participants = vote_data[message_id][self.date_str]["参加(🟢)"]
-        if len(participants) >= 3:
+        if len(participants) >= 1:
             await self.send_confirm_notice(interaction, participants)
 
     async def send_confirm_notice(self, interaction: discord.Interaction, participants: dict):
@@ -291,9 +291,9 @@ async def on_ready():
 
     now = datetime.datetime.now(JST)
     # ===== 固定時刻スケジュール（テスト用） =====
-    three_week_test = now.replace(hour=1, minute=44, second=0, microsecond=0)  # Step1
-    two_week_test   = now.replace(hour=1, minute=45, second=0, microsecond=0)  # Step2
-    one_week_test   = now.replace(hour=1, minute=46, second=0, microsecond=0)  # Step3
+    three_week_test = now.replace(hour=1, minute=50, second=0, microsecond=0)  # Step1
+    two_week_test   = now.replace(hour=1, minute=51, second=0, microsecond=0)  # Step2
+    one_week_test   = now.replace(hour=1, minute=52, second=0, microsecond=0)  # Step3
 
     scheduler.add_job(send_step1_schedule, DateTrigger(run_date=three_week_test))
     scheduler.add_job(send_step2_remind,   DateTrigger(run_date=two_week_test))
