@@ -248,9 +248,9 @@ async def on_ready():
         print(f"⚠ コマンド同期エラー: {e}")
 
     now = datetime.datetime.now(JST)
-    three_week_test = now.replace(hour=0, minute=36, second=0, microsecond=0)
-    two_week_test   = now.replace(hour=0, minute=37, second=0, microsecond=0)
-    one_week_test   = now.replace(hour=0, minute=38, second=0, microsecond=0)
+    three_week_test = now.replace(hour=0, minute=40, second=0, microsecond=0)
+    two_week_test   = now.replace(hour=0, minute=41, second=0, microsecond=0)
+    one_week_test   = now.replace(hour=0, minute=42, second=0, microsecond=0)
 
     scheduler.add_job(send_step1_schedule, DateTrigger(run_date=three_week_test))
     scheduler.add_job(send_step2_remind,   DateTrigger(run_date=two_week_test))
