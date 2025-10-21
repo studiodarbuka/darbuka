@@ -497,8 +497,6 @@ scheduler = AsyncIOScheduler(timezone=JST)
 @bot.event
 async def on_ready():
     load_votes()
-    load_locations()
-    load_confirmed()
     try:
         await tree.sync()
         print("✅ Slash Commands synced!")
@@ -506,19 +504,20 @@ async def on_ready():
         print(f"⚠ コマンド同期エラー: {e}")
 
     now = datetime.datetime.now(JST)
-    # ===== 固定時刻スケジュール（テスト用） =====
-    three_week_test = now.replace(hour=19, minute=19, second=0, microsecond=0)  # Step1
-    two_week_test   = now.replace(hour=19, minute=20, second=0, microsecond=0)  # Step2
-    one_week_test   = now.replace(hour=19, minute=21, second=0, microsecond=0)  # Step3
 
-    # ジョブ追加（DateTrigger: 単発テスト実行）
-    scheduler.add_job(lambda: asyncio.create_task(send_step1_schedule()), DateTrigger(run_date=three_week_test))
-    scheduler.add_job(lambda: asyncio.create_task(send_step2_remind()),   DateTrigger(run_date=two_week_test))
-    scheduler.add_job(lambda: asyncio.create_task(send_step3_remind()),   DateTrigger(run_date=one_week_test))
+    # ===== テスト用：任意時間に Step1～3 実行 =====
+    three_week_test = now.replace(hour=19, minute=26, second=0, microsecond=0)  # Step1
+    two_week_test   = now.replace(hour=19, minute=27, second=0, microsecond=0)  # Step2
+    one_week_test   = now.replace(hour=19, minute=28, second=0, microsecond=0)  # Step3
+
+    # 非同期関数を直接渡す
+    scheduler.add_job(send_step1_schedule, DateTrigger(run_date=three_week_test))
+    scheduler.add_job(send_step2_remind,   DateTrigger(run_date=two_week_test))
+    scheduler.add_job(send_step3_remind,   DateTrigger(run_date=one_week_test))
 
     scheduler.start()
     print(f"✅ Logged in as {bot.user}")
-    print(f"✅ Scheduler started (Test mode). Step1～3は指定時刻に実行されます。")
+    print("✅ Scheduler started. Step1～3 は指定時刻に実行されます。")
 
 # ====== Bot起動 ======
 if __name__ == "__main__":
