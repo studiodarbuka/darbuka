@@ -192,7 +192,7 @@ class ConfirmView(discord.ui.View):
 
         locs = load_locations().get(self.level, [])
         if not locs:
-            await interaction.response.send_message(f"⚠️ {self.level} のスタジオが未登録です。`/場所 登録` で追加してください。", ephemeral=True)
+            await interaction.response.send_message(f"⚠️ {self.level} のスタジオが未登録です。`/place 登録` で追加してください。", ephemeral=True)
             return
 
         view = StudioSelectView(self.level, self.date_str, locs, self.notice_key)
@@ -430,8 +430,8 @@ async def unconfirm_event(interaction: discord.Interaction, 級: str, 日付: st
     else:
         await interaction.response.send_message("⚠️ 対象チャンネルが見つかりません。", ephemeral=True)
 
-@tree.command(name="event", description="突発イベントを作成して投票可能")
-@app_commands.describe(級="初級 or 中級", 日付="例: 2025-11-09", タイトル="イベントタイトル")
+@tree.command(name="lesson", description="突発レッスンを作成して投票可能")
+@app_commands.describe(級="初級 or 中級", 日付="例: 2025-11-09", タイトル="レッスンタイトル")
 async def create_event(interaction: discord.Interaction, 級: str, 日付: str, タイトル: str):
     guild = interaction.guild
     target_ch = discord.utils.find(lambda c: 級 in c.name, guild.text_channels)
@@ -439,7 +439,7 @@ async def create_event(interaction: discord.Interaction, 級: str, 日付: str, 
         await interaction.response.send_message("⚠️ 対象チャンネルが見つかりません。", ephemeral=True)
         return
 
-    embed = discord.Embed(title=f"📅 {級} - 突発イベント {日付}", description=タイトル)
+    embed = discord.Embed(title=f"📅 {級} - 突発レッスン {日付}", description=タイトル)
     embed.add_field(name="参加(🟢)", value="0人", inline=False)
     embed.add_field(name="オンライン可(🟡)", value="0人", inline=False)
     embed.add_field(name="不可(🔴)", value="0人", inline=False)
@@ -448,10 +448,10 @@ async def create_event(interaction: discord.Interaction, 級: str, 日付: str, 
     msg = await target_ch.send(embed=embed, view=view)
     vote_data[str(msg.id)] = {"channel": target_ch.id, 日付: {"参加(🟢)": {}, "オンライン可(🟡)": {}, "不可(🔴)": {}}}
     save_votes()
-    await interaction.response.send_message("✅ 突発イベントを作成しました。", ephemeral=True)
+    await interaction.response.send_message("✅ 突発レッスンを作成しました。", ephemeral=True)
 
-# ====== /場所 コマンド（登録・削除・表示） ======
-@tree.command(name="場所", description="スタジオを管理します（追加/削除/表示）")
+# ====== /place コマンド（登録・削除・表示） ======
+@tree.command(name="place", description="スタジオを管理します（追加/削除/表示）")
 @app_commands.describe(action="操作: 登録 / 削除 / 一覧", level="級: 初級 / 中級", name="スタジオ名（登録/削除時に指定）")
 async def manage_location(interaction: discord.Interaction, action: str, level: str, name: str = None):
     action = action.strip()
