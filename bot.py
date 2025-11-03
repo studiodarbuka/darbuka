@@ -431,9 +431,20 @@ async def create_event(interaction: discord.Interaction, 級: str, 日付: str, 
 @tree.command(name="place", description="スタジオを管理します（追加/削除/表示）")
 @app_commands.describe(action="操作: 登録 / 削除 / 一覧", name="スタジオ名（登録/削除時に指定）")
 async def manage_location(interaction: discord.Interaction, action: str, name: str = None):
+    # DM で実行された場合は弾く
+    if isinstance(interaction.channel, discord.DMChannel):
+        await interaction.response.send_message(
+            "⚠️ このコマンドはサーバー内のチャンネルから実行してください。",
+            ephemeral=True
+        )
+        return
+
     action = action.strip()
     if action not in ("登録", "削除", "一覧"):
-        await interaction.response.send_message("⚠️ 操作は「登録」「削除」「一覧」のいずれかを指定してください。", ephemeral=True)
+        await interaction.response.send_message(
+            "⚠️ 操作は「登録」「削除」「一覧」のいずれかを指定してください。",
+            ephemeral=True
+        )
         return
 
     # 実行チャンネル名から級を判定
@@ -442,18 +453,27 @@ async def manage_location(interaction: discord.Interaction, action: str, name: s
     elif "中級" in interaction.channel.name:
         level = "中級"
     else:
-        await interaction.response.send_message("⚠️ このチャンネルから級を判定できません。チャンネル名に『初級』か『中級』を含めてください。", ephemeral=True)
+        await interaction.response.send_message(
+            "⚠️ このチャンネルから級を判定できません。チャンネル名に『初級』か『中級』を含めてください。",
+            ephemeral=True
+        )
         return
 
     data = load_locations()
 
     if action == "登録":
         if not name:
-            await interaction.response.send_message("⚠️ 登録するスタジオ名を指定してください。", ephemeral=True)
+            await interaction.response.send_message(
+                "⚠️ 登録するスタジオ名を指定してください。",
+                ephemeral=True
+            )
             return
         data.setdefault(level, [])
         if name in data[level]:
-            await interaction.response.send_message("⚠️ そのスタジオは既に登録されています。", ephemeral=True)
+            await interaction.response.send_message(
+                "⚠️ そのスタジオは既に登録されています。",
+                ephemeral=True
+            )
             return
         data[level].append(name)
         save_locations()
@@ -461,14 +481,20 @@ async def manage_location(interaction: discord.Interaction, action: str, name: s
 
     elif action == "削除":
         if not name:
-            await interaction.response.send_message("⚠️ 削除するスタジオ名を指定してください。", ephemeral=True)
+            await interaction.response.send_message(
+                "⚠️ 削除するスタジオ名を指定してください。",
+                ephemeral=True
+            )
             return
         if name in data.get(level, []):
             data[level].remove(name)
             save_locations()
             await interaction.response.send_message(f"🗑️ {level} から「{name}」を削除しました。", ephemeral=True)
         else:
-            await interaction.response.send_message("⚠️ 指定のスタジオは登録されていません。", ephemeral=True)
+            await interaction.response.send_message(
+                "⚠️ 指定のスタジオは登録されていません。",
+                ephemeral=True
+            )
 
     elif action == "一覧":
         lst = data.get(level, [])
@@ -490,9 +516,9 @@ async def on_ready():
         print(f"⚠ コマンド同期エラー: {e}")
 
     now = datetime.datetime.now(JST)
-    three_week_test = now.replace(hour=1, minute=0, second=0, microsecond=0)
-    two_week_test = now.replace(hour=1, minute=1, second=0, microsecond=0)
-    one_week_test = now.replace(hour=1, minute=2, second=0, microsecond=0)
+    three_week_test = now.replace(hour=1, minute=8, second=0, microsecond=0)
+    two_week_test = now.replace(hour=1, minute=9, second=0, microsecond=0)
+    one_week_test = now.replace(hour=1, minute=10, second=0, microsecond=0)
 
     scheduler.add_job(send_step1_schedule, DateTrigger(run_date=three_week_test))
     scheduler.add_job(send_step2_remind, DateTrigger(run_date=two_week_test))
