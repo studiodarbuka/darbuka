@@ -382,9 +382,11 @@ async def send_step3_remind():
         message = f"📢【{week_name} {level} 1週間前催促】\n\n"
         all_voted = True
         for date in week:
+            date_has_msg = False
             for msg_id, data in vote_data.items():
                 if data.get("channel") != target_channel.id or date not in data:
                     continue
+                date_has_msg = True
                 date_votes = data[date]
                 unvoted_members = []
                 for member in role.members:
@@ -396,11 +398,15 @@ async def send_step3_remind():
                 if unvoted_members:
                     all_voted = False
                     message += f"{date}\n" + ", ".join(unvoted_members) + "\n\n"
+            # 投票メッセージが存在しない日付も未投票扱い
+            if not date_has_msg:
+                all_voted = False
         if all_voted:
             message = f"📢【{week_name} {level}】全員投票済みです。ありがとうございます！🎉"
         if message.strip():
             await target_channel.send(message)
     print("✅ Step3: テスト1週間前催促送信完了")
+
 
 
 @tree.command(name="lesson", description="突発レッスンを作成して投票可能")
@@ -484,9 +490,9 @@ async def on_ready():
         print(f"⚠ コマンド同期エラー: {e}")
 
     now = datetime.datetime.now(JST)
-    three_week_test = now.replace(hour=0, minute=52, second=0, microsecond=0)
-    two_week_test = now.replace(hour=0, minute=53, second=0, microsecond=0)
-    one_week_test = now.replace(hour=0, minute=54, second=0, microsecond=0)
+    three_week_test = now.replace(hour=1, minute=0, second=0, microsecond=0)
+    two_week_test = now.replace(hour=1, minute=1, second=0, microsecond=0)
+    one_week_test = now.replace(hour=1, minute=2, second=0, microsecond=0)
 
     scheduler.add_job(send_step1_schedule, DateTrigger(run_date=three_week_test))
     scheduler.add_job(send_step2_remind, DateTrigger(run_date=two_week_test))
