@@ -300,7 +300,7 @@ async def send_confirm_notice(guild: discord.Guild, level: str, date_str: str, p
         ),
         color=0x00BFFF
     )
-    view = ConfirmView(level, date_str, notice_key)
+    view = ConfirmViewWithImage(level, date_str, notice_key)
     await confirm_channel.send(embed=embed, view=view)
 
 
@@ -484,9 +484,9 @@ async def on_ready():
         print(f"⚠ コマンド同期エラー: {e}")
 
     now = datetime.datetime.now(JST)
-    three_week_test = now.replace(hour=0, minute=46, second=0, microsecond=0)
-    two_week_test = now.replace(hour=0, minute=47, second=0, microsecond=0)
-    one_week_test = now.replace(hour=0, minute=48, second=0, microsecond=0)
+    three_week_test = now.replace(hour=0, minute=52, second=0, microsecond=0)
+    two_week_test = now.replace(hour=0, minute=53, second=0, microsecond=0)
+    one_week_test = now.replace(hour=0, minute=54, second=0, microsecond=0)
 
     scheduler.add_job(send_step1_schedule, DateTrigger(run_date=three_week_test))
     scheduler.add_job(send_step2_remind, DateTrigger(run_date=two_week_test))
