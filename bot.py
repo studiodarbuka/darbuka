@@ -293,7 +293,7 @@ async def send_confirm_notice(guild: discord.Guild, level: str, date_str: str, p
         ),
         color=0x00BFFF
     )
-    view = ConfirmViewWithImage(level, date_str, notice_key)
+    view = ConfirmViewWithImage(level, date_str, notice_key=notice_key)
     await confirm_channel.send(embed=embed, view=view)
 
 
