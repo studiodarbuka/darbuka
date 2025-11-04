@@ -416,79 +416,48 @@ async def create_event(interaction: discord.Interaction, 級: str, 日付: str, 
     save_votes()
     await interaction.response.send_message("✅ 突発レッスンを作成しました。", ephemeral=True)
 
-# ====== /place コマンド（登録・削除・表示） ======
-@tree.command(name="place", description="スタジオを管理します（追加/削除/表示）")
+@tree.command(name="place", description="スタジオを管理します（追加/削除/一覧）")
 @app_commands.describe(action="操作: 登録 / 削除 / 一覧", name="スタジオ名（登録/削除時に指定）")
 async def manage_location(interaction: discord.Interaction, action: str, name: str = None):
-    # DM で実行された場合は弾く
-    if isinstance(interaction.channel, discord.DMChannel):
-        await interaction.response.send_message(
-            "⚠️ このコマンドはサーバー内のチャンネルから実行してください。",
-            ephemeral=True
-        )
-        return
-
     action = action.strip()
     if action not in ("登録", "削除", "一覧"):
         await interaction.response.send_message(
-            "⚠️ 操作は「登録」「削除」「一覧」のいずれかを指定してください。",
-            ephemeral=True
+            "⚠️ 操作は「登録」「削除」「一覧」のいずれかを指定してください。", ephemeral=True
         )
         return
 
-    # 実行チャンネル名から級を判定
-    if "初級" in interaction.channel.name:
-        level = "初級"
-    elif "中級" in interaction.channel.name:
-        level = "中級"
-    else:
+    # name は登録・削除時は必須
+    if action in ("登録", "削除") and not name:
         await interaction.response.send_message(
-            "⚠️ このチャンネルから級を判定できません。チャンネル名に『初級』か『中級』を含めてください。",
-            ephemeral=True
+            "⚠️ スタジオ名を必ず指定してください。", ephemeral=True
         )
         return
 
+    # 純粋に「場所リスト」として管理
     data = load_locations()
+    level_key = "共通"  # 級は問わないので共通カテゴリにまとめる
 
     if action == "登録":
-        if not name:
-            await interaction.response.send_message(
-                "⚠️ 登録するスタジオ名を指定してください。",
-                ephemeral=True
-            )
+        data.setdefault(level_key, [])
+        if name in data[level_key]:
+            await interaction.response.send_message(f"⚠️ そのスタジオは既に登録されています。", ephemeral=True)
             return
-        data.setdefault(level, [])
-        if name in data[level]:
-            await interaction.response.send_message(
-                "⚠️ そのスタジオは既に登録されています。",
-                ephemeral=True
-            )
-            return
-        data[level].append(name)
+        data[level_key].append(name)
         save_locations()
-        await interaction.response.send_message(f"✅ {level} に「{name}」を登録しました。", ephemeral=True)
+        await interaction.response.send_message(f"✅ 「{name}」を登録しました。", ephemeral=True)
 
     elif action == "削除":
-        if not name:
-            await interaction.response.send_message(
-                "⚠️ 削除するスタジオ名を指定してください。",
-                ephemeral=True
-            )
-            return
-        if name in data.get(level, []):
-            data[level].remove(name)
+        if name in data.get(level_key, []):
+            data[level_key].remove(name)
             save_locations()
-            await interaction.response.send_message(f"🗑️ {level} から「{name}」を削除しました。", ephemeral=True)
+            await interaction.response.send_message(f"🗑️ 「{name}」を削除しました。", ephemeral=True)
         else:
-            await interaction.response.send_message(
-                "⚠️ 指定のスタジオは登録されていません。",
-                ephemeral=True
-            )
+            await interaction.response.send_message("⚠️ 指定のスタジオは登録されていません。", ephemeral=True)
 
     elif action == "一覧":
-        lst = data.get(level, [])
+        lst = data.get(level_key, [])
         if not lst:
-            await interaction.response.send_message(f"📍 {level} の登録スタジオはありません。", ephemeral=True)
+            await interaction.response.send_message(f"📍 登録スタジオはありません。", ephemeral=True)
         else:
             await interaction.response.send_message("📍 登録スタジオ:\n" + "\n".join(f"・{s}" for s in lst), ephemeral=True)
 
@@ -505,9 +474,9 @@ async def on_ready():
         print(f"⚠ コマンド同期エラー: {e}")
 
     now = datetime.datetime.now(JST)
-    three_week_test = now.replace(hour=15, minute=31, second=0, microsecond=0)
-    two_week_test = now.replace(hour=15, minute=32, second=0, microsecond=0)
-    one_week_test = now.replace(hour=15, minute=33, second=0, microsecond=0)
+    three_week_test = now.replace(hour=17, minute=2, second=0, microsecond=0)
+    two_week_test = now.replace(hour=17, minute=3, second=0, microsecond=0)
+    one_week_test = now.replace(hour=17, minute=4, second=0, microsecond=0)
 
     scheduler.add_job(send_step1_schedule, DateTrigger(run_date=three_week_test))
     scheduler.add_job(send_step2_remind, DateTrigger(run_date=two_week_test))
