@@ -166,14 +166,12 @@ class VoteView(discord.ui.View):
     async def no_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.handle_vote(interaction, "不可(🔴)")
 
-# ====== Confirm / Image + Studio UI（通知所上完結版） ======
+# ====== Confirm / Image + Studio UI（DM なし版） ======
 class ConfirmViewWithImage(discord.ui.View):
-    def __init__(self, level, date_str, notice_key=None):
+    def __init__(self, date_str, notice_key=None):
         super().__init__(timeout=None)
-        self.level = level
         self.date_str = date_str
         self.notice_key = notice_key
-        self.image_url = None
 
     @discord.ui.button(label="✅ 開催を確定する", style=discord.ButtonStyle.success)
     async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -183,8 +181,10 @@ class ConfirmViewWithImage(discord.ui.View):
             await interaction.response.send_message("⚠️ この操作は講師のみ可能です。", ephemeral=True)
             return
 
+        # 画像添付確認をメッセージに促す
         await interaction.response.send_message(
-            "📸 ここに画像を添付するか、テキストで『スキップ』と入力してください。", ephemeral=False
+            "📸 このメッセージに画像を添付して送信してください。\n送らない場合は「スキップ」と返信してください。",
+            ephemeral=True
         )
 
         # 画像受信待機
@@ -194,73 +194,77 @@ class ConfirmViewWithImage(discord.ui.View):
         try:
             msg = await bot.wait_for('message', check=check, timeout=300)
             if msg.content.lower() == "スキップ":
-                self.image_url = None
+                image_url = None
             elif msg.attachments:
-                self.image_url = msg.attachments[0].url
+                image_url = msg.attachments[0].url
             else:
-                self.image_url = None
+                image_url = None
         except asyncio.TimeoutError:
-            self.image_url = None
+            image_url = None
             await interaction.channel.send("⏰ 画像送信タイムアウト。スキップ扱いにします。")
 
-        # スタジオ選択プルダウン
-        locs = load_locations().get(self.level, [])
+        # 確認データ保存
+        if self.notice_key:
+            confirmed.setdefault(self.notice_key, {})
+            confirmed[self.notice_key]["image_url"] = image_url
+            save_confirmed()
+
+        # スタジオ選択プルダウンを人数確定通知所で表示
+        locs = load_locations().get("共通", [])
         if not locs:
-            await interaction.channel.send(f"⚠️ {self.level} のスタジオが未登録です。/place 登録 で追加してください。")
+            await interaction.channel.send(f"⚠️ スタジオが未登録です。/place 登録 <名前> で追加してください。")
             return
 
-        view = StudioSelectView(self.level, self.date_str, locs, self.notice_key, self.image_url)
+        view = StudioSelectView(self.date_str, locs, self.notice_key)
         await interaction.channel.send("🏢 スタジオを選択してください", view=view)
 
 
 class StudioSelectView(discord.ui.View):
-    def __init__(self, level, date_str, locations_list, notice_key=None, image_url=None):
+    def __init__(self, date_str, locations_list, notice_key=None):
         super().__init__(timeout=300)
-        self.level = level
         self.date_str = date_str
         self.notice_key = notice_key
-        self.image_url = image_url
-        options = [discord.SelectOption(label=loc, description=f"{level}用スタジオ") for loc in locations_list]
-        self.add_item(StudioDropdown(level, date_str, options, notice_key, image_url))
+        options = [discord.SelectOption(label=loc) for loc in locations_list]
+        self.add_item(StudioDropdown(date_str, options, notice_key))
 
 
 class StudioDropdown(discord.ui.Select):
-    def __init__(self, level, date_str, options, notice_key=None, image_url=None):
+    def __init__(self, date_str, options, notice_key=None):
         super().__init__(placeholder="スタジオを選択してください", options=options, min_values=1, max_values=1)
-        self.level = level
         self.date_str = date_str
         self.notice_key = notice_key
-        self.image_url = image_url
 
     async def callback(self, interaction: discord.Interaction):
         studio = self.values[0]
+        confirm_channel = discord.utils.get(interaction.guild.text_channels, name="人数確定通知所")
 
         embed = discord.Embed(
             title="✅【開催確定】",
-            description=f"{self.level} の {self.date_str} は **{studio}** で開催が確定しました。\n参加者の皆さん、よろしくお願いします！",
+            description=f"{self.date_str} は **{studio}** で開催が確定しました。\n参加者の皆さん、よろしくお願いします！",
             color=0x00FF00
         )
 
-        if self.image_url:
-            embed.set_image(url=self.image_url)
+        # 画像がある場合は Embed にセット
+        if self.notice_key and confirmed[self.notice_key].get("image_url"):
+            embed.set_image(url=confirmed[self.notice_key]["image_url"])
 
-        target_ch = discord.utils.get(interaction.guild.text_channels, name="人数確定通知所")
-        if target_ch:
-            await target_ch.send(embed=embed)
+        if confirm_channel:
+            await confirm_channel.send(embed=embed)
 
         # 確定情報を保存
         if self.notice_key:
-            confirmed.setdefault(self.notice_key, {})
             confirmed[self.notice_key].update({
                 "final": "確定",
                 "studio": studio,
                 "confirmed_by": interaction.user.display_name,
-                "image_url": self.image_url,
                 "timestamp": datetime.datetime.now(JST).isoformat()
             })
             save_confirmed()
 
-        await interaction.response.edit_message(content=f"✅ {studio} を選択しました。", view=None)
+        try:
+            await interaction.response.edit_message(content=f"✅ {studio} を選択しました。", view=None)
+        except:
+            await interaction.response.send_message(f"✅ {studio} を選択しました。", ephemeral=True)
 
 
 # ====== send_confirm_notice helper ======
@@ -416,8 +420,10 @@ async def create_event(interaction: discord.Interaction, 級: str, 日付: str, 
     save_votes()
     await interaction.response.send_message("✅ 突発レッスンを作成しました。", ephemeral=True)
 
+
+
 @tree.command(name="place", description="スタジオを管理します（追加/削除/一覧）")
-@app_commands.describe(action="操作: 登録 / 削除 / 一覧", name="スタジオ名（登録/削除時に指定）")
+@app_commands.describe(action="操作: 登録 / 削除 / 一覧", name="スタジオ名（登録/削除時に必須）")
 async def manage_location(interaction: discord.Interaction, action: str, name: str = None):
     action = action.strip()
     if action not in ("登録", "削除", "一覧"):
@@ -426,16 +432,15 @@ async def manage_location(interaction: discord.Interaction, action: str, name: s
         )
         return
 
-    # name は登録・削除時は必須
-    if action in ("登録", "削除") and not name:
+    # 登録・削除のときは name 必須
+    if action in ("登録", "削除") and (not name or name.strip() == ""):
         await interaction.response.send_message(
-            "⚠️ スタジオ名を必ず指定してください。", ephemeral=True
+            "⚠️ 登録・削除時は必ずスタジオ名を指定してください。", ephemeral=True
         )
         return
 
-    # 純粋に「場所リスト」として管理
     data = load_locations()
-    level_key = "共通"  # 級は問わないので共通カテゴリにまとめる
+    level_key = "共通"  # 級は問わないので共通カテゴリ
 
     if action == "登録":
         data.setdefault(level_key, [])
@@ -474,9 +479,9 @@ async def on_ready():
         print(f"⚠ コマンド同期エラー: {e}")
 
     now = datetime.datetime.now(JST)
-    three_week_test = now.replace(hour=17, minute=10, second=0, microsecond=0)
-    two_week_test = now.replace(hour=17, minute=11, second=0, microsecond=0)
-    one_week_test = now.replace(hour=17, minute=12, second=0, microsecond=0)
+    three_week_test = now.replace(hour=17, minute=54, second=0, microsecond=0)
+    two_week_test = now.replace(hour=17, minute=55, second=0, microsecond=0)
+    one_week_test = now.replace(hour=17, minute=56, second=0, microsecond=0)
 
     scheduler.add_job(send_step1_schedule, DateTrigger(run_date=three_week_test))
     scheduler.add_job(send_step2_remind, DateTrigger(run_date=two_week_test))
