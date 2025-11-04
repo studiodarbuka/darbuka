@@ -166,13 +166,14 @@ class VoteView(discord.ui.View):
     async def no_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.handle_vote(interaction, "不可(🔴)")
 
-# ====== Confirm / Image + Studio UI (動作保証版) ======
+# ====== Confirm / Image + Studio UI（通知所上完結版） ======
 class ConfirmViewWithImage(discord.ui.View):
     def __init__(self, level, date_str, notice_key=None):
         super().__init__(timeout=None)
         self.level = level
         self.date_str = date_str
         self.notice_key = notice_key
+        self.image_url = None
 
     @discord.ui.button(label="✅ 開催を確定する", style=discord.ButtonStyle.success)
     async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -182,68 +183,57 @@ class ConfirmViewWithImage(discord.ui.View):
             await interaction.response.send_message("⚠️ この操作は講師のみ可能です。", ephemeral=True)
             return
 
-        # DMで画像送信依頼
-        try:
-            dm = await interaction.user.create_dm()
-            await dm.send(
-                "📸 開催用画像を送信してください。\n送らない場合は「スキップ」と返信してください。"
-            )
-            await interaction.response.send_message("✅ DMに画像送信を依頼しました。", ephemeral=True)
-        except Exception as e:
-            await interaction.response.send_message(f"⚠️ DM送信に失敗しました: {e}", ephemeral=True)
-            return
+        await interaction.response.send_message(
+            "📸 ここに画像を添付するか、テキストで『スキップ』と入力してください。", ephemeral=False
+        )
 
         # 画像受信待機
         def check(msg):
-            return msg.author == interaction.user and isinstance(msg.channel, discord.DMChannel)
+            return msg.author == interaction.user and msg.channel == interaction.channel
 
         try:
-            msg = await bot.wait_for('message', check=check, timeout=300)  # 5分待機
+            msg = await bot.wait_for('message', check=check, timeout=300)
             if msg.content.lower() == "スキップ":
-                image_url = None
+                self.image_url = None
             elif msg.attachments:
-                image_url = msg.attachments[0].url
+                self.image_url = msg.attachments[0].url
             else:
-                image_url = None
+                self.image_url = None
         except asyncio.TimeoutError:
-            image_url = None
-            await dm.send("⏰ 画像送信タイムアウト。スキップ扱いにします。")
-
-        # 確認データ保存
-        if self.notice_key:
-            confirmed.setdefault(self.notice_key, {})
-            confirmed[self.notice_key]["image_url"] = image_url
-            save_confirmed()
+            self.image_url = None
+            await interaction.channel.send("⏰ 画像送信タイムアウト。スキップ扱いにします。")
 
         # スタジオ選択プルダウン
         locs = load_locations().get(self.level, [])
         if not locs:
-            await dm.send(f"⚠️ {self.level} のスタジオが未登録です。/place 登録 で追加してください。")
+            await interaction.channel.send(f"⚠️ {self.level} のスタジオが未登録です。/place 登録 で追加してください。")
             return
-        view = StudioSelectView(self.level, self.date_str, locs, self.notice_key)
-        await dm.send("🏢 スタジオを選択してください", view=view)
+
+        view = StudioSelectView(self.level, self.date_str, locs, self.notice_key, self.image_url)
+        await interaction.channel.send("🏢 スタジオを選択してください", view=view)
 
 
 class StudioSelectView(discord.ui.View):
-    def __init__(self, level, date_str, locations_list, notice_key=None):
+    def __init__(self, level, date_str, locations_list, notice_key=None, image_url=None):
         super().__init__(timeout=300)
         self.level = level
         self.date_str = date_str
         self.notice_key = notice_key
+        self.image_url = image_url
         options = [discord.SelectOption(label=loc, description=f"{level}用スタジオ") for loc in locations_list]
-        self.add_item(StudioDropdown(level, date_str, options, notice_key))
+        self.add_item(StudioDropdown(level, date_str, options, notice_key, image_url))
 
 
 class StudioDropdown(discord.ui.Select):
-    def __init__(self, level, date_str, options, notice_key=None):
+    def __init__(self, level, date_str, options, notice_key=None, image_url=None):
         super().__init__(placeholder="スタジオを選択してください", options=options, min_values=1, max_values=1)
         self.level = level
         self.date_str = date_str
         self.notice_key = notice_key
+        self.image_url = image_url
 
     async def callback(self, interaction: discord.Interaction):
         studio = self.values[0]
-        target_ch = discord.utils.find(lambda c: self.level in c.name, interaction.guild.text_channels)
 
         embed = discord.Embed(
             title="✅【開催確定】",
@@ -251,27 +241,26 @@ class StudioDropdown(discord.ui.Select):
             color=0x00FF00
         )
 
-        # 画像がある場合は Embed にセット
-        if self.notice_key and confirmed[self.notice_key].get("image_url"):
-            embed.set_image(url=confirmed[self.notice_key]["image_url"])
+        if self.image_url:
+            embed.set_image(url=self.image_url)
 
+        target_ch = discord.utils.get(interaction.guild.text_channels, name="人数確定通知所")
         if target_ch:
             await target_ch.send(embed=embed)
 
         # 確定情報を保存
         if self.notice_key:
+            confirmed.setdefault(self.notice_key, {})
             confirmed[self.notice_key].update({
                 "final": "確定",
                 "studio": studio,
                 "confirmed_by": interaction.user.display_name,
+                "image_url": self.image_url,
                 "timestamp": datetime.datetime.now(JST).isoformat()
             })
             save_confirmed()
 
-        try:
-            await interaction.response.edit_message(content=f"✅ {studio} を選択しました。", view=None)
-        except:
-            await interaction.response.send_message(f"✅ {studio} を選択しました。", ephemeral=True)
+        await interaction.response.edit_message(content=f"✅ {studio} を選択しました。", view=None)
 
 
 # ====== send_confirm_notice helper ======
