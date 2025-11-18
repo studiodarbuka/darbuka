@@ -143,15 +143,15 @@ class VoteView(discord.ui.View):
         except:
             pass
 
-        # Step4自動通知
+        # 自動通知（Step4用）
         participants = vote_data[message_id][self.date_str]["参加(🟢)"]
         if len(participants) >= 1:
             key = f"{message_id}|{self.date_str}"
             if confirmed.get(key) is None:
-                confirmed[key] = {"notified": True, "level_guess": None, "participants": list(participants.values())}
+                confirmed[key] = {"notified": True, "participants": list(participants.values())}
                 save_confirmed()
                 channel_name = interaction.channel.name
-                level = "初級" if "初級" in channel_name else ("中級" if "中級" in channel_name else "未特定")
+                level = "未特定"
                 await send_confirm_notice(interaction.guild, level, self.date_str, list(participants.values()), key, source_channel_id=interaction.channel.id)
 
     @discord.ui.button(label="参加(🟢)", style=discord.ButtonStyle.success)
@@ -176,7 +176,6 @@ class ConfirmViewWithImage(discord.ui.View):
 
     @discord.ui.button(label="✅ 開催を確定する", style=discord.ButtonStyle.success)
     async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # 講師チェック
         role = discord.utils.get(interaction.guild.roles, name="講師")
         if role and role not in interaction.user.roles:
             await interaction.response.send_message("⚠️ この操作は講師のみ可能です。", ephemeral=True)
@@ -207,7 +206,6 @@ class ConfirmViewWithImage(discord.ui.View):
             confirmed[self.notice_key]["image_url"] = image_url
             save_confirmed()
 
-        # スタジオ選択
         locs = load_locations().get("共通", [])
         if not locs:
             await interaction.channel.send(f"⚠️ スタジオが未登録です。/place 登録 <名前> で追加してください。")
@@ -233,14 +231,8 @@ class StudioDropdown(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         studio = self.values[0]
 
-        # チャンネル判定: 初級 / 中級
-        week_name = get_week_name(datetime.datetime.now(JST))
-        if "初級" in interaction.channel.name:
-            confirm_channel = discord.utils.get(interaction.guild.text_channels, name=f"{week_name}-初級")
-        elif "中級" in interaction.channel.name:
-            confirm_channel = discord.utils.get(interaction.guild.text_channels, name=f"{week_name}-中級")
-        else:
-            confirm_channel = discord.utils.get(interaction.guild.text_channels, name="人数確定通知所")
+        source_channel_id = confirmed.get(self.notice_key, {}).get("source_channel") if self.notice_key else None
+        source_channel = interaction.guild.get_channel(source_channel_id) if source_channel_id else None
 
         embed = discord.Embed(
             title="✅【開催確定】",
@@ -251,10 +243,9 @@ class StudioDropdown(discord.ui.Select):
         if self.notice_key and confirmed.get(self.notice_key, {}).get("image_url"):
             embed.set_image(url=confirmed[self.notice_key]["image_url"])
 
-        if confirm_channel:
-            await confirm_channel.send(embed=embed)
+        if source_channel:
+            await source_channel.send(embed=embed)
 
-        # 確定情報を保存
         if self.notice_key:
             confirmed[self.notice_key].update({
                 "final": "確定",
@@ -264,6 +255,10 @@ class StudioDropdown(discord.ui.Select):
             })
             save_confirmed()
 
+        confirm_channel = discord.utils.get(interaction.guild.text_channels, name="人数確定通知所")
+        if confirm_channel:
+            await confirm_channel.send(f"📢 {self.date_str} の人数確定通知を {source_channel.mention if source_channel else '元チャンネル'} に送信しました。")
+
         try:
             await interaction.response.edit_message(content=f"✅ {studio} を選択しました。", view=None)
         except:
@@ -272,17 +267,9 @@ class StudioDropdown(discord.ui.Select):
 # ====== send_confirm_notice helper ======
 async def send_confirm_notice(guild: discord.Guild, level: str, date_str: str, participants: list, notice_key: str = None, source_channel_id: int = None):
     week_name = get_week_name(datetime.datetime.now(JST))
-    if "初級" in level:
-        confirm_channel = discord.utils.get(guild.text_channels, name=f"{week_name}-初級")
-    elif "中級" in level:
-        confirm_channel = discord.utils.get(guild.text_channels, name=f"{week_name}-中級")
-    else:
-        confirm_channel = discord.utils.get(guild.text_channels, name="人数確定通知所")
 
-    if not confirm_channel:
-        print("⚠️ 確定通知送信先チャンネルが見つかりません。")
-        return
-
+    main_channel = bot.get_channel(source_channel_id) if source_channel_id else None
+    confirm_channel = discord.utils.get(guild.text_channels, name="人数確定通知所")
     role = discord.utils.get(guild.roles, name="講師")
     mention = role.mention if role else "@講師"
     participants_list = ", ".join(participants) if participants else "なし"
@@ -292,120 +279,75 @@ async def send_confirm_notice(guild: discord.Guild, level: str, date_str: str, p
         confirmed[notice_key].update({"source_channel": source_channel_id})
         save_confirmed()
 
-    embed = discord.Embed(
-        title="📢 人数確定通知",
-        description=(f"日程: {date_str}\n"
-                     f"級: {level}\n"
-                     f"参加者 ({len(participants)}人): {participants_list}\n\n"
-                     f"{mention} さん、スタジオを抑えてください。\n"
-                     f"開催の確定／不確定を下のボタンで選択してください。"),
-        color=0x00BFFF
-    )
-    view = ConfirmViewWithImage(level, date_str, notice_key=notice_key)
-    await confirm_channel.send(embed=embed, view=view)
+    if main_channel:
+        embed = discord.Embed(
+            title="📢 人数確定通知",
+            description=(f"日程: {date_str}\n"
+                         f"参加者 ({len(participants)}人): {participants_list}\n\n"
+                         f"{mention} さん、スタジオを抑えてください。\n"
+                         f"開催の確定／不確定を下のボタンで選択してください。"),
+            color=0x00BFFF
+        )
+        view = ConfirmViewWithImage(level, date_str, notice_key=notice_key)
+        await main_channel.send(embed=embed, view=view)
 
-# ====== Step1～3 実装 ======
-# Step1: 3週間後の予定作成
+    if confirm_channel:
+        await confirm_channel.send(
+            f"📢 {date_str} の人数確定通知を {main_channel.mention if main_channel else '元チャンネル'} に送信しました。"
+        )
+
+# ====== Step1～Step3 スケジュール ======
 async def send_step1_schedule():
-    await bot.wait_until_ready()
-    guild = bot.guilds[0]
-    category_beginner = discord.utils.get(guild.categories, name="初級")
-    category_intermediate = discord.utils.get(guild.categories, name="中級")
-    if not category_beginner or not category_intermediate:
-        print("⚠️ カテゴリ「初級」「中級」が見つかりません。")
-        return
-    start = get_schedule_start()
-    week_name = get_week_name(start)
-    ch_names = {
-        "初級": f"{week_name}-初級",
-        "中級": f"{week_name}-中級"
-    }
-    channels = {}
-    for level, ch_name in ch_names.items():
-        existing = discord.utils.get(guild.text_channels, name=ch_name)
-        if existing:
-            channels[level] = existing
-        else:
-            category = category_beginner if level == "初級" else category_intermediate
-            new_ch = await guild.create_text_channel(ch_name, category=category)
-            channels[level] = new_ch
-    week = generate_week_schedule()
-    for level, ch in channels.items():
-        for date in week:
-            embed = discord.Embed(title=f"📅 {level} - 三週間後の予定 {date}")
-            embed.add_field(name="参加(🟢)", value="0人", inline=False)
-            embed.add_field(name="オンライン可(🟡)", value="0人", inline=False)
-            embed.add_field(name="不可(🔴)", value="0人", inline=False)
-            view = VoteView(date)
-            msg = await ch.send(embed=embed, view=view)
-            vote_data[str(msg.id)] = {"channel": ch.id, date: {"参加(🟢)": {}, "オンライン可(🟡)": {}, "不可(🔴)": {}}}
-    save_votes()
-    print("✅ Step1: 投稿完了")
+    schedule = generate_week_schedule()
+    for guild in bot.guilds:
+        for channel in guild.text_channels:
+            if "候補日通知" in channel.name:
+                for date_str in schedule:
+                    embed = discord.Embed(title=f"📅 予定候補: {date_str}", description="参加 / オンライン可 / 不可 を選択してください", color=0xFFA500)
+                    view = VoteView(date_str)
+                    await channel.send(embed=embed, view=view)
 
-# Step2: テストリマインド
 async def send_step2_remind():
-    await bot.wait_until_ready()
-    guild = bot.guilds[0]
-    start = get_schedule_start()
-    week_name = get_week_name(start)
-    for level in ["初級", "中級"]:
-        ch_name = f"{week_name}-{level}"
-        target_channel = discord.utils.get(guild.text_channels, name=ch_name)
-        if not target_channel:
-            continue
-        week = generate_week_schedule()
-        message = f"📢【{week_name} {level}リマインド】\n\n📅 日程ごとの参加状況：\n\n"
-        for date in week:
-            for msg_id, data in vote_data.items():
-                if data.get("channel") != target_channel.id or date not in data:
-                    continue
-                date_votes = data[date]
-                message += f"{date}\n"
-                message += f"参加(🟢) " + (", ".join(date_votes["参加(🟢)"].values()) if date_votes["参加(🟢)"] else "なし") + "\n"
-                message += f"オンライン可(🟡) " + (", ".join(date_votes["オンライン可(🟡)"].values()) if date_votes["オンライン可(🟡)"] else "なし") + "\n"
-                message += f"不可(🔴) " + (", ".join(date_votes["不可(🔴)"].values()) if date_votes["不可(🔴)"] else "なし") + "\n\n"
-        await target_channel.send(message)
-    print("✅ Step2: テストリマインド送信完了")
+    """2週間前リマインド"""
+    for message_id, dates in vote_data.items():
+        for date_str in dates.keys():
+            notice_key = f"{message_id}|{date_str}"
+            channel_id = confirmed.get(notice_key, {}).get("source_channel")
+            if not channel_id:
+                continue
+            channel = bot.get_channel(channel_id)
+            if not channel:
+                continue
+            voted_users = set()
+            for s in dates[date_str].values():
+                voted_users.update(s.keys())
+            all_members = [m for m in channel.members if not m.bot]
+            for member in all_members:
+                if str(member.id) not in voted_users:
+                    try:
+                        await channel.send(f"{member.mention} ⏰ リマインド: {date_str} の予定についてまだ投票していません。")
+                    except: pass
 
-# Step3: 1週間前催促
 async def send_step3_remind():
-    await bot.wait_until_ready()
-    guild = bot.guilds[0]
-    start = get_schedule_start()
-    week_name = get_week_name(start)
-    for level in ["初級", "中級"]:
-        ch_name = f"{week_name}-{level}"
-        target_channel = discord.utils.get(guild.text_channels, name=ch_name)
-        if not target_channel:
-            continue
-        role = discord.utils.get(guild.roles, name=level)
-        if not role:
-            continue
-        week = generate_week_schedule()
-        message = f"📢【{week_name} {level} 1週間前催促】\n\n"
-        all_voted = True
-        for date in week:
-            date_has_msg = False
-            for msg_id, data in vote_data.items():
-                if data.get("channel") != target_channel.id or date not in data:
-                    continue
-                date_has_msg = True
-                date_votes = data[date]
-                unvoted_members = []
-                for member in role.members:
-                    voted_ids = set()
-                    for v_dict in date_votes.values():
-                        voted_ids.update(v_dict.keys())
-                    if str(member.id) not in voted_ids:
-                        unvoted_members.append(member.mention)
-                if unvoted_members:
-                    all_voted = False
-                    message += f"{date}\n" + ", ".join(unvoted_members) + "\n\n"
-            if not date_has_msg:
-                message += f"{date}\n投票メッセージなし\n\n"
-        if not all_voted:
-            await target_channel.send(message)
-    print("✅ Step3: 1週間前催促送信完了")
+    """1週間前再リマインド"""
+    for message_id, dates in vote_data.items():
+        for date_str in dates.keys():
+            notice_key = f"{message_id}|{date_str}"
+            channel_id = confirmed.get(notice_key, {}).get("source_channel")
+            if not channel_id:
+                continue
+            channel = bot.get_channel(channel_id)
+            if not channel:
+                continue
+            voted_users = set()
+            for s in dates[date_str].values():
+                voted_users.update(s.keys())
+            all_members = [m for m in channel.members if not m.bot]
+            for member in all_members:
+                if str(member.id) not in voted_users:
+                    try:
+                        await channel.send(f"{member.mention} ⚠️ 最終リマインド: {date_str} の予定についてまだ投票していません。")
+                    except: pass
 
 # ====== /place コマンド ======
 @tree.command(name="place", description="スタジオを管理します（追加/削除/表示）")
@@ -443,6 +385,8 @@ scheduler = AsyncIOScheduler(timezone=JST)
 @bot.event
 async def on_ready():
     load_votes()
+    load_locations()
+    load_confirmed()
     try:
         await tree.sync()
         print("✅ Slash Commands synced!")
@@ -450,18 +394,22 @@ async def on_ready():
         print(f"⚠ コマンド同期エラー: {e}")
 
     now = datetime.datetime.now(JST)
-    three_week_test = now.replace(hour=19, minute=3, second=0, microsecond=0)
-    two_week_test = now.replace(hour=19, minute=4, second=0, microsecond=0)
-    one_week_test = now.replace(hour=19, minute=5, second=0, microsecond=0)
 
-    scheduler.add_job(send_step1_schedule, DateTrigger(run_date=three_week_test))
-    scheduler.add_job(send_step2_remind, DateTrigger(run_date=two_week_test))
-    scheduler.add_job(send_step3_remind, DateTrigger(run_date=one_week_test))
+    # ===== テスト用：任意時間に Step1～3 実行 =====
+    three_week_test = now.replace(hour=2, minute=10, second=0, microsecond=0)  # Step1
+    two_week_test   = now.replace(hour=2, minute=11, second=0, microsecond=0)  # Step2
+    one_week_test   = now.replace(hour=2, minute=12, second=0, microsecond=0)  # Step3
+
+    scheduler.add_job(lambda: asyncio.create_task(send_step1_schedule()), DateTrigger(run_date=three_week_test))
+    scheduler.add_job(lambda: asyncio.create_task(send_step2_remind()),   DateTrigger(run_date=two_week_test))
+    scheduler.add_job(lambda: asyncio.create_task(send_step3_remind()),   DateTrigger(run_date=one_week_test))
+
+    # ===== 日曜に定期実行したい場合の例（コメント） =====
+    # from apscheduler.triggers.cron import CronTrigger
+    # scheduler.add_job(lambda: asyncio.create_task(send_step1_schedule()), CronTrigger(day_of_week='sun', hour=2, minute=0))
+    # scheduler.add_job(lambda: asyncio.create_task(send_step2_remind()),   CronTrigger(day_of_week='sun', hour=2, minute=5))
+    # scheduler.add_job(lambda: asyncio.create_task(send_step3_remind()),   CronTrigger(day_of_week='sun', hour=2, minute=10))
+
     scheduler.start()
-
     print(f"✅ Logged in as {bot.user}")
     print("✅ Scheduler started. Step1～3 は指定時刻に実行されます。")
-
-# ====== Bot起動 ======
-if __name__ == "__main__":
-    bot.run(TOKEN)
