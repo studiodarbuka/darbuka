@@ -349,9 +349,12 @@ scheduler = AsyncIOScheduler(timezone=JST)
 
 @bot.event
 async def on_ready():
-    load_votes()
-    load_locations()
-    load_confirmed()
+    global vote_data, locations, confirmed
+    # 削除済みの load_XXX() の代わりに直接ロード
+    vote_data = load_json(VOTE_FILE, {})
+    locations = load_json(LOC_FILE, {})
+    confirmed = load_json(CONFIRMED_FILE, {})
+
     try:
         await tree.sync()
         print("✅ Slash Commands synced!")
@@ -360,25 +363,15 @@ async def on_ready():
 
     now = datetime.datetime.now(JST)
 
-    # ===== テスト用：任意時間に Step1～3 実行 =====
-    three_week_test = now.replace(hour=18, minute=15, second=0, microsecond=0)  # Step1
-    two_week_test   = now.replace(hour=18, minute=16, second=0, microsecond=0)  # Step2
-    one_week_test   = now.replace(hour=18, minute=17, second=0, microsecond=0)  # Step3
+    three_week_test = now.replace(hour=18, minute=20, second=0, microsecond=0)
+    two_week_test   = now.replace(hour=18, minute=21, second=0, microsecond=0)
+    one_week_test   = now.replace(hour=18, minute=22, second=0, microsecond=0)
 
     scheduler.add_job(lambda: asyncio.create_task(send_step1_schedule()), DateTrigger(run_date=three_week_test))
     scheduler.add_job(lambda: asyncio.create_task(send_step2_remind()),   DateTrigger(run_date=two_week_test))
     scheduler.add_job(lambda: asyncio.create_task(send_step3_remind()),   DateTrigger(run_date=one_week_test))
 
-    # ===== 日曜に定期実行したい場合の例（コメント） =====
-    # from apscheduler.triggers.cron import CronTrigger
-    # scheduler.add_job(lambda: asyncio.create_task(send_step1_schedule()), CronTrigger(day_of_week='sun', hour=2, minute=0))
-    # scheduler.add_job(lambda: asyncio.create_task(send_step2_remind()),   CronTrigger(day_of_week='sun', hour=2, minute=5))
-    # scheduler.add_job(lambda: asyncio.create_task(send_step3_remind()),   CronTrigger(day_of_week='sun', hour=2, minute=10))
-
     scheduler.start()
     print(f"✅ Logged in as {bot.user}")
     print("✅ Scheduler started. Step1～3 は指定時刻に実行されます。")
-
-# ====== Run Bot ======
-bot.run(TOKEN)
 
