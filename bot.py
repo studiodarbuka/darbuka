@@ -1,4 +1,7 @@
-# bot.py (Render Worker 向けフル版)
+# bot.py (Render-ready full)
+# Render Worker 向けに調整済み。
+# APScheduler の AsyncIOScheduler に coroutine を直接登録することで
+# "no running event loop" エラーを回避しています。
 
 import os
 import discord
@@ -10,6 +13,9 @@ import datetime
 import pytz
 import json
 import asyncio
+import logging
+
+logging.basicConfig(level=logging.INFO)
 
 # ====== 基本設定 ======
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
@@ -38,23 +44,34 @@ def load_json(path, default):
     except FileNotFoundError:
         return default
     except Exception as e:
-        print(f"⚠ load_json error {path}: {e}")
+        logging.warning(f"⚠ load_json error {path}: {e}")
         return default
+
 
 def save_json(path, obj):
     try:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(obj, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"⚠ save_json error {path}: {e}")
+        logging.warning(f"⚠ save_json error {path}: {e}")
+
 
 vote_data = load_json(VOTE_FILE, {})
 locations = load_json(LOC_FILE, {})
 confirmed = load_json(CONFIRMED_FILE, {})
 
-def save_votes(): save_json(VOTE_FILE, vote_data)
-def save_locations(): save_json(LOC_FILE, locations)
-def save_confirmed(): save_json(CONFIRMED_FILE, confirmed)
+
+def save_votes():
+    save_json(VOTE_FILE, vote_data)
+
+
+def save_locations():
+    save_json(LOC_FILE, locations)
+
+
+def save_confirmed():
+    save_json(CONFIRMED_FILE, confirmed)
+
 
 def load_locations():
     global locations
@@ -69,6 +86,7 @@ def get_schedule_start():
     target = this_sunday + datetime.timedelta(weeks=3)
     return target.replace(hour=0, minute=0, second=0, microsecond=0)
 
+
 def generate_week_schedule():
     start = get_schedule_start()
     weekday_jp = ["月","火","水","木","金","土","日"]
@@ -76,6 +94,7 @@ def generate_week_schedule():
         f"{(start + datetime.timedelta(days=i)).strftime('%Y-%m-%d')} ({weekday_jp[(start + datetime.timedelta(days=i)).weekday()]})"
         for i in range(7)
     ]
+
 
 def get_week_name(date):
     month = date.month
@@ -121,7 +140,7 @@ class VoteView(discord.ui.View):
             embed.add_field(name=f"{k} ({len(v)}人)", value="\n".join(v.values()) if v else "0人", inline=False)
         try:
             await interaction.response.edit_message(embed=embed, view=self)
-        except:
+        except Exception:
             pass
 
         participants = vote_data[message_id][self.date_str]["参加(🟢)"]
@@ -193,6 +212,7 @@ class ConfirmViewWithImage(discord.ui.View):
         view = StudioSelectView(self.date_str, locs, self.notice_key)
         await interaction.channel.send("🏢 スタジオを選択してください", view=view)
 
+
 class StudioSelectView(discord.ui.View):
     def __init__(self, date_str, locations_list, notice_key=None):
         super().__init__(timeout=300)
@@ -200,6 +220,7 @@ class StudioSelectView(discord.ui.View):
         self.notice_key = notice_key
         options = [discord.SelectOption(label=loc) for loc in locations_list]
         self.add_item(StudioDropdown(date_str, options, notice_key))
+
 
 class StudioDropdown(discord.ui.Select):
     def __init__(self, date_str, options, notice_key=None):
@@ -239,8 +260,9 @@ class StudioDropdown(discord.ui.Select):
 
         try:
             await interaction.response.edit_message(content=f"✅ {studio} を選択しました。", view=None)
-        except:
+        except Exception:
             await interaction.response.send_message(f"✅ {studio} を選択しました。", ephemeral=True)
+
 
 # ====== send_confirm_notice helper ======
 async def send_confirm_notice(guild: discord.Guild, level: str, date_str: str, participants: list, notice_key: str = None, source_channel_id: int = None):
@@ -270,6 +292,7 @@ async def send_confirm_notice(guild: discord.Guild, level: str, date_str: str, p
     if confirm_channel:
         await confirm_channel.send(f"📢 {date_str} の人数確定通知を {main_channel.mention if main_channel else '元チャンネル'} に送信しました。")
 
+
 # ====== Step1～3 スケジュール ======
 async def send_step1_schedule():
     schedule = generate_week_schedule()
@@ -279,7 +302,11 @@ async def send_step1_schedule():
                 for date_str in schedule:
                     embed = discord.Embed(title=f"📅 予定候補: {date_str}", description="参加 / オンライン可 / 不可 を選択してください", color=0xFFA500)
                     view = VoteView(date_str)
-                    await channel.send(embed=embed, view=view)
+                    try:
+                        await channel.send(embed=embed, view=view)
+                    except Exception:
+                        logging.exception("候補メッセージ送信でエラー")
+
 
 async def send_step2_remind():
     for message_id, dates in vote_data.items():
@@ -299,7 +326,9 @@ async def send_step2_remind():
                 if str(member.id) not in voted_users:
                     try:
                         await channel.send(f"{member.mention} ⏰ リマインド: {date_str} の予定についてまだ投票していません。")
-                    except: pass
+                    except Exception:
+                        pass
+
 
 async def send_step3_remind():
     for message_id, dates in vote_data.items():
@@ -319,7 +348,9 @@ async def send_step3_remind():
                 if str(member.id) not in voted_users:
                     try:
                         await channel.send(f"{member.mention} ⚠️ 最終リマインド: {date_str} の予定についてまだ投票していません。")
-                    except: pass
+                    except Exception:
+                        pass
+
 
 # ====== /place コマンド ======
 @tree.command(name="place", description="スタジオを管理します（追加/削除/表示）")
@@ -350,13 +381,11 @@ async def manage_location(interaction: discord.Interaction, action: str, name: s
     else:
         await interaction.response.send_message("⚠️ action は 登録 / 削除 / 一覧 のいずれかを指定してください。", ephemeral=True)
 
-# ====== Scheduler / on_ready ======
+
+# ====== Scheduler ======
 scheduler = AsyncIOScheduler(timezone=JST)
 
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.date import DateTrigger
-import asyncio
-
+# wrapper coroutine を用意（APScheduler に直接渡す）
 async def schedule_step1():
     await send_step1_schedule()
 
@@ -365,6 +394,7 @@ async def schedule_step2():
 
 async def schedule_step3():
     await send_step3_remind()
+
 
 @bot.event
 async def on_ready():
@@ -375,22 +405,42 @@ async def on_ready():
 
     try:
         await tree.sync()
-        print("✅ Slash Commands synced!")
-    except Exception as e:
-        print(f"⚠ コマンド同期エラー: {e}")
+        logging.info("✅ Slash Commands synced!")
+    except Exception:
+        logging.exception("⚠ コマンド同期エラー")
 
     now = datetime.datetime.now(JST)
-    three_week_test = now.replace(hour=18, minute=55, second=0, microsecond=0)
-    two_week_test   = now.replace(hour=18, minute=56, second=0, microsecond=0)
-    one_week_test   = now.replace(hour=18, minute=57, second=0, microsecond=0)
 
-    # AsyncIOScheduler は async 関数を直接 add_job に渡せる
-    scheduler.add_job(lambda: asyncio.create_task(schedule_step1()), DateTrigger(run_date=three_week_test))
-    scheduler.add_job(lambda: asyncio.create_task(schedule_step2()), DateTrigger(run_date=two_week_test))
-    scheduler.add_job(lambda: asyncio.create_task(schedule_step3()), DateTrigger(run_date=one_week_test))
+    # ユーザー指定の時刻（replace を使う形式）。必要ならここを動的に変更してください。
+    three_week_test = now.replace(hour=19, minute=5, second=0, microsecond=0)
+    two_week_test   = now.replace(hour=19, minute=6, second=0, microsecond=0)
+    one_week_test   = now.replace(hour=19, minute=7, second=0, microsecond=0)
 
-    scheduler.start()
-    print(f"✅ Scheduler started: Step1~3 will run at {three_week_test}, {two_week_test}, {one_week_test}")
+    # 過ぎていたら翌日に補正
+    if three_week_test <= now: three_week_test += datetime.timedelta(days=1)
+    if two_week_test   <= now: two_week_test   += datetime.timedelta(days=1)
+    if one_week_test   <= now: one_week_test   += datetime.timedelta(days=1)
+
+    # スケジューラ開始（Event loop 上で動く）
+    if not scheduler.running:
+        scheduler.start()
+
+    # 重複登録を避けるため、既存ジョブがあれば削除
+    for jid in ("step1", "step2", "step3"):
+        try:
+            existing = scheduler.get_job(jid)
+            if existing:
+                scheduler.remove_job(jid)
+        except Exception:
+            pass
+
+    # AsyncIOScheduler は coroutine を直接渡せる
+    scheduler.add_job(schedule_step1, trigger=DateTrigger(run_date=three_week_test), id="step1")
+    scheduler.add_job(schedule_step2, trigger=DateTrigger(run_date=two_week_test), id="step2")
+    scheduler.add_job(schedule_step3, trigger=DateTrigger(run_date=one_week_test), id="step3")
+
+    logging.info(f"✅ Logged in as {bot.user}")
+    logging.info(f"✅ Scheduler started. Step1~3 scheduled at: {three_week_test}, {two_week_test}, {one_week_test}")
 
 
 # ====== Render Worker 向け常時起動 ======
