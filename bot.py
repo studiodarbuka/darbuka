@@ -353,6 +353,19 @@ async def manage_location(interaction: discord.Interaction, action: str, name: s
 # ====== Scheduler / on_ready ======
 scheduler = AsyncIOScheduler(timezone=JST)
 
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.date import DateTrigger
+import asyncio
+
+async def schedule_step1():
+    await send_step1_schedule()
+
+async def schedule_step2():
+    await send_step2_remind()
+
+async def schedule_step3():
+    await send_step3_remind()
+
 @bot.event
 async def on_ready():
     global vote_data, locations, confirmed
@@ -367,15 +380,14 @@ async def on_ready():
         print(f"⚠ コマンド同期エラー: {e}")
 
     now = datetime.datetime.now(JST)
+    three_week_test = now.replace(hour=18, minute=55, second=0, microsecond=0)
+    two_week_test   = now.replace(hour=18, minute=56, second=0, microsecond=0)
+    one_week_test   = now.replace(hour=18, minute=57, second=0, microsecond=0)
 
-    # 指定時刻を作る（今日の18:43/44/45）
-    three_week_test = now.replace(hour=18, minute=48, second=0, microsecond=0)
-    two_week_test   = now.replace(hour=18, minute=49, second=0, microsecond=0)
-    one_week_test   = now.replace(hour=18, minute=50, second=0, microsecond=0)
-
-    scheduler.add_job(lambda: asyncio.create_task(send_step1_schedule()), DateTrigger(run_date=three_week_test))
-    scheduler.add_job(lambda: asyncio.create_task(send_step2_remind()),   DateTrigger(run_date=two_week_test))
-    scheduler.add_job(lambda: asyncio.create_task(send_step3_remind()),   DateTrigger(run_date=one_week_test))
+    # AsyncIOScheduler は async 関数を直接 add_job に渡せる
+    scheduler.add_job(lambda: asyncio.create_task(schedule_step1()), DateTrigger(run_date=three_week_test))
+    scheduler.add_job(lambda: asyncio.create_task(schedule_step2()), DateTrigger(run_date=two_week_test))
+    scheduler.add_job(lambda: asyncio.create_task(schedule_step3()), DateTrigger(run_date=one_week_test))
 
     scheduler.start()
     print(f"✅ Scheduler started: Step1~3 will run at {three_week_test}, {two_week_test}, {one_week_test}")
