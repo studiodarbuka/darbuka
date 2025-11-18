@@ -396,9 +396,9 @@ async def on_ready():
     now = datetime.datetime.now(JST)
 
     # ===== テスト用：任意時間に Step1～3 実行 =====
-    three_week_test = now.replace(hour=2, minute=10, second=0, microsecond=0)  # Step1
-    two_week_test   = now.replace(hour=2, minute=11, second=0, microsecond=0)  # Step2
-    one_week_test   = now.replace(hour=2, minute=12, second=0, microsecond=0)  # Step3
+    three_week_test = now.replace(hour=15, minute=10, second=0, microsecond=0)  # Step1
+    two_week_test   = now.replace(hour=15, minute=11, second=0, microsecond=0)  # Step2
+    one_week_test   = now.replace(hour=15, minute=12, second=0, microsecond=0)  # Step3
 
     scheduler.add_job(lambda: asyncio.create_task(send_step1_schedule()), DateTrigger(run_date=three_week_test))
     scheduler.add_job(lambda: asyncio.create_task(send_step2_remind()),   DateTrigger(run_date=two_week_test))
