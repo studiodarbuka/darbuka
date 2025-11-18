@@ -1,4 +1,5 @@
-# bot.py (完全統合版)
+# bot.py (Render Worker 向けフル版)
+
 import os
 import discord
 from discord import app_commands
@@ -22,7 +23,7 @@ intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
-# ====== データファイル ======
+# ====== データディレクトリ ======
 DATA_DIR = "./data"
 os.makedirs(DATA_DIR, exist_ok=True)
 VOTE_FILE = os.path.join(DATA_DIR, "votes.json")
@@ -54,6 +55,11 @@ confirmed = load_json(CONFIRMED_FILE, {})
 def save_votes(): save_json(VOTE_FILE, vote_data)
 def save_locations(): save_json(LOC_FILE, locations)
 def save_confirmed(): save_json(CONFIRMED_FILE, confirmed)
+
+def load_locations():
+    global locations
+    locations = load_json(LOC_FILE, {})
+    return locations
 
 # ====== 日付計算 ======
 def get_schedule_start():
@@ -350,7 +356,6 @@ scheduler = AsyncIOScheduler(timezone=JST)
 @bot.event
 async def on_ready():
     global vote_data, locations, confirmed
-    # 削除済みの load_XXX() の代わりに直接ロード
     vote_data = load_json(VOTE_FILE, {})
     locations = load_json(LOC_FILE, {})
     confirmed = load_json(CONFIRMED_FILE, {})
@@ -363,15 +368,19 @@ async def on_ready():
 
     now = datetime.datetime.now(JST)
 
-    three_week_test = now.replace(hour=18, minute=20, second=0, microsecond=0)
-    two_week_test   = now.replace(hour=18, minute=21, second=0, microsecond=0)
-    one_week_test   = now.replace(hour=18, minute=22, second=0, microsecond=0)
+    # 指定時刻を作る（今日の18:43/44/45）
+    three_week_test = now.replace(hour=18, minute=48, second=0, microsecond=0)
+    two_week_test   = now.replace(hour=18, minute=49, second=0, microsecond=0)
+    one_week_test   = now.replace(hour=18, minute=50, second=0, microsecond=0)
 
     scheduler.add_job(lambda: asyncio.create_task(send_step1_schedule()), DateTrigger(run_date=three_week_test))
     scheduler.add_job(lambda: asyncio.create_task(send_step2_remind()),   DateTrigger(run_date=two_week_test))
     scheduler.add_job(lambda: asyncio.create_task(send_step3_remind()),   DateTrigger(run_date=one_week_test))
 
     scheduler.start()
-    print(f"✅ Logged in as {bot.user}")
-    print("✅ Scheduler started. Step1～3 は指定時刻に実行されます。")
+    print(f"✅ Scheduler started: Step1~3 will run at {three_week_test}, {two_week_test}, {one_week_test}")
 
+
+# ====== Render Worker 向け常時起動 ======
+if __name__ == "__main__":
+    bot.run(TOKEN)
