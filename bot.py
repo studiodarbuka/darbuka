@@ -9,6 +9,11 @@ import datetime
 import pytz
 import json
 import asyncio
+import logging
+
+# ====== logger 設定 ======
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("discord_bot")
 
 # ====== 基本設定 ======
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
@@ -40,7 +45,7 @@ def load_json(path, default):
     except FileNotFoundError:
         return default
     except Exception as e:
-        print(f"⚠ load_json error {path}: {e}")
+        logger.warning(f"⚠ load_json error {path}: {e}")
         return default
 
 def save_json(path, obj):
@@ -48,7 +53,7 @@ def save_json(path, obj):
         with open(path, "w", encoding="utf-8") as f:
             json.dump(obj, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"⚠ save_json error {path}: {e}")
+        logger.warning(f"⚠ save_json error {path}: {e}")
 
 def load_votes():
     global vote_data
@@ -175,7 +180,6 @@ class ConfirmViewWithImage(discord.ui.View):
 
     @discord.ui.button(label="✅ 開催を確定する", style=discord.ButtonStyle.success)
     async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # 講師チェック
         role = discord.utils.get(interaction.guild.roles, name="講師")
         if role and role not in interaction.user.roles:
             await interaction.response.send_message("⚠️ この操作は講師のみ可能です。", ephemeral=True)
@@ -232,8 +236,6 @@ class StudioDropdown(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         studio = self.values[0]
 
-        # チャンネル判定
-        week_name = get_week_name(datetime.datetime.now(JST))
         confirm_channel = discord.utils.get(interaction.guild.text_channels, name="人数確定通知所")
 
         embed = discord.Embed(
@@ -248,7 +250,6 @@ class StudioDropdown(discord.ui.Select):
         if confirm_channel:
             await confirm_channel.send(embed=embed)
 
-        # 確定情報を保存
         if self.notice_key:
             confirmed[self.notice_key].update({
                 "final": "確定",
@@ -267,7 +268,7 @@ class StudioDropdown(discord.ui.Select):
 async def send_confirm_notice(guild: discord.Guild, level: str, date_str: str, participants: list, notice_key: str = None, source_channel_id: int = None):
     confirm_channel = discord.utils.get(guild.text_channels, name="人数確定通知所")
     if not confirm_channel:
-        print("⚠️ 確定通知送信先チャンネルが見つかりません。")
+        logger.warning("⚠️ 確定通知送信先チャンネルが見つかりません。")
         return
 
     role = discord.utils.get(guild.roles, name="講師")
@@ -324,8 +325,7 @@ async def manage_location(interaction: discord.Interaction, action: str, name: s
 # ====== Scheduler (テスト用時間指定) ======
 scheduler = AsyncIOScheduler(timezone=JST)
 
-# Step1～3テスト関数
-async def schedule_step1():  # 三週間後予定作成
+async def schedule_step1():
     await bot.wait_until_ready()
     guild = bot.guilds[0]
     week_name = get_week_name(get_schedule_start())
@@ -342,19 +342,18 @@ async def schedule_step1():  # 三週間後予定作成
         msg = await ch.send(embed=embed, view=view)
         vote_data[str(msg.id)] = {"channel": ch.id, date: {"参加(🟢)": {}, "オンライン可(🟡)": {}, "不可(🔴)": {}}}
     save_votes()
-    print("✅ Step1 完了")
+    logger.info("✅ Step1 完了")
 
-async def schedule_step2():  # テストリマインド
+async def schedule_step2():
     await bot.wait_until_ready()
-    print("✅ Step2 (テストリマインド) 実行")
+    logger.info("✅ Step2 (テストリマインド) 実行")
 
-async def schedule_step3():  # テスト1週間前催促
+async def schedule_step3():
     await bot.wait_until_ready()
-    print("✅ Step3 (1週間前催促) 実行")
+    logger.info("✅ Step3 (1週間前催促) 実行")
 
 @bot.event
 async def on_ready():
-    # reload persistence
     load_votes()
     load_locations()
     load_confirmed()
@@ -362,23 +361,21 @@ async def on_ready():
     try:
         await tree.sync()
         logger.info("✅ Slash Commands synced!")
-    except Exception:
-        logger.exception("⚠ コマンド同期エラー")
+    except Exception as e:
+        logger.exception(f"⚠ コマンド同期エラー: {e}")
 
     now = datetime.datetime.now(JST)
-    three_week_test = now.replace(hour=12, minute=30, second=0, microsecond=0)
-    two_week_test   = now.replace(hour=12, minute=32, second=0, microsecond=0)
-    one_week_test   = now.replace(hour=12, minute=36, second=0, microsecond=0)
+    three_week_test = now.replace(hour=12, minute=40, second=0, microsecond=0)
+    two_week_test   = now.replace(hour=12, minute=41, second=0, microsecond=0)
+    one_week_test   = now.replace(hour=12, minute=42, second=0, microsecond=0)
 
     if three_week_test <= now: three_week_test += datetime.timedelta(days=1)
     if two_week_test   <= now: two_week_test   += datetime.timedelta(days=1)
     if one_week_test   <= now: one_week_test   += datetime.timedelta(days=1)
 
-    # scheduler start if not running
     if not scheduler.running:
         scheduler.start()
 
-    # remove duplicate jobs
     for jid in ("step1", "step2", "step3"):
         try:
             if scheduler.get_job(jid):
@@ -386,7 +383,6 @@ async def on_ready():
         except Exception:
             pass
 
-    # register coroutine jobs directly
     scheduler.add_job(schedule_step1, trigger=DateTrigger(run_date=three_week_test), id="step1")
     scheduler.add_job(schedule_step2, trigger=DateTrigger(run_date=two_week_test), id="step2")
     scheduler.add_job(schedule_step3, trigger=DateTrigger(run_date=one_week_test), id="step3")
@@ -397,6 +393,3 @@ async def on_ready():
 # ====== Run ======
 if __name__ == "__main__":
     bot.run(TOKEN)
-
-
-
