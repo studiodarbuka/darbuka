@@ -37,34 +37,61 @@ def load_json(path, default):
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
-    except:
+    except FileNotFoundError:
+        return default
+    except Exception as e:
+        print(f"⚠ load_json error {path}: {e}")
         return default
 
 def save_json(path, obj):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(obj, f, ensure_ascii=False, indent=2)
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(obj, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"⚠ save_json error {path}: {e}")
 
-def load_votes(): global vote_data; vote_data = load_json(VOTE_FILE, {})
-def save_votes(): save_json(VOTE_FILE, vote_data)
-def load_locations(): global locations; locations = load_json(LOC_FILE, {}); return locations
-def save_locations(): save_json(LOC_FILE, locations)
-def load_confirmed(): global confirmed; confirmed = load_json(CONFIRMED_FILE, {}); return confirmed
-def save_confirmed(): save_json(CONFIRMED_FILE, confirmed)
+def load_votes():
+    global vote_data
+    vote_data = load_json(VOTE_FILE, {})
 
-load_votes(); load_locations(); load_confirmed()
+def save_votes():
+    save_json(VOTE_FILE, vote_data)
+
+def load_locations():
+    global locations
+    locations = load_json(LOC_FILE, {})
+    return locations
+
+def save_locations():
+    save_json(LOC_FILE, locations)
+
+def load_confirmed():
+    global confirmed
+    confirmed = load_json(CONFIRMED_FILE, {})
+    return confirmed
+
+def save_confirmed():
+    save_json(CONFIRMED_FILE, confirmed)
+
+# 初期ロード
+load_votes()
+load_locations()
+load_confirmed()
 
 # ====== 日付処理 ======
-def get_schedule_start():
+def get_schedule_start(weeks_ahead=3):
     today = datetime.datetime.now(JST)
     days_since_sunday = (today.weekday() + 1) % 7
     this_sunday = today - datetime.timedelta(days=days_since_sunday)
-    target = this_sunday + datetime.timedelta(weeks=3)
+    target = this_sunday + datetime.timedelta(weeks=weeks_ahead)
     return target.replace(hour=0, minute=0, second=0, microsecond=0)
 
-def generate_week_schedule(start=None):
-    start = start or get_schedule_start()
+def generate_week_schedule(start):
     weekday_jp = ["月","火","水","木","金","土","日"]
-    return [f"{(start + datetime.timedelta(days=i)).strftime('%Y-%m-%d')} ({weekday_jp[(start + datetime.timedelta(days=i)).weekday()]})" for i in range(7)]
+    return [
+        f"{(start + datetime.timedelta(days=i)).strftime('%Y-%m-%d')} ({weekday_jp[(start + datetime.timedelta(days=i)).weekday()]})"
+        for i in range(7)
+    ]
 
 def get_week_name(date):
     month = date.month
@@ -83,177 +110,277 @@ class VoteView(discord.ui.View):
         message_id = str(interaction.message.id)
         user_id = str(interaction.user.id)
         user_name = interaction.user.display_name
-        if message_id not in vote_data: vote_data[message_id] = {}
+
+        if message_id not in vote_data:
+            vote_data[message_id] = {}
         if self.date_str not in vote_data[message_id]:
             vote_data[message_id][self.date_str] = {"参加(🟢)": {}, "オンライン可(🟡)": {}, "不可(🔴)": {}}
 
+        # トグル
         current_status = None
-        for k,v in vote_data[message_id][self.date_str].items():
-            if user_id in v: current_status = k; break
-        if current_status == status: del vote_data[message_id][self.date_str][status][user_id]
+        for k, v in vote_data[message_id][self.date_str].items():
+            if user_id in v:
+                current_status = k
+                break
+        if current_status == status:
+            del vote_data[message_id][self.date_str][status][user_id]
         else:
-            for v_dict in vote_data[message_id][self.date_str].values(): v_dict.pop(user_id,None)
+            for v_dict in vote_data[message_id][self.date_str].values():
+                if user_id in v_dict:
+                    del v_dict[user_id]
             vote_data[message_id][self.date_str][status][user_id] = user_name
+
         save_votes()
 
+        # Embed更新
         embed = discord.Embed(title=f"【予定候補】{self.date_str}")
-        for k,v in vote_data[message_id][self.date_str].items():
+        for k, v in vote_data[message_id][self.date_str].items():
             embed.add_field(name=f"{k} ({len(v)}人)", value="\n".join(v.values()) if v else "0人", inline=False)
-        try: await interaction.response.edit_message(embed=embed, view=self)
-        except: pass
+        try:
+            await interaction.response.edit_message(embed=embed, view=self)
+        except:
+            pass
 
+        # 自動通知: 参加1名以上で人数確定通知
         participants = vote_data[message_id][self.date_str]["参加(🟢)"]
-        if len(participants)>=1:
-            key=f"{message_id}|{self.date_str}"
+        if len(participants) >= 1:
+            key = f"{message_id}|{self.date_str}"
             if confirmed.get(key) is None:
-                confirmed[key]={"notified": True,"participants": list(participants.values())}
+                confirmed[key] = {"notified": True, "participants": list(participants.values())}
                 save_confirmed()
-                channel_name=interaction.channel.name
-                level="初級" if "初級" in channel_name else ("中級" if "中級" in channel_name else "未特定")
+                channel_name = interaction.channel.name
+                level = "初級" if "初級" in channel_name else ("中級" if "中級" in channel_name else "未特定")
                 await send_confirm_notice(interaction.guild, level, self.date_str, list(participants.values()), key, source_channel_id=interaction.channel.id)
 
     @discord.ui.button(label="参加(🟢)", style=discord.ButtonStyle.success)
     async def yes_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.handle_vote(interaction,"参加(🟢)")
+        await self.handle_vote(interaction, "参加(🟢)")
+
     @discord.ui.button(label="オンライン可(🟡)", style=discord.ButtonStyle.primary)
     async def maybe_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.handle_vote(interaction,"オンライン可(🟡)")
+        await self.handle_vote(interaction, "オンライン可(🟡)")
+
     @discord.ui.button(label="不可(🔴)", style=discord.ButtonStyle.danger)
     async def no_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.handle_vote(interaction,"不可(🔴)")
+        await self.handle_vote(interaction, "不可(🔴)")
 
 # ====== ConfirmViewWithImage / StudioSelectView ======
 class ConfirmViewWithImage(discord.ui.View):
     def __init__(self, level, date_str, notice_key=None):
         super().__init__(timeout=None)
-        self.level=level
-        self.date_str=date_str
-        self.notice_key=notice_key
+        self.level = level
+        self.date_str = date_str
+        self.notice_key = notice_key
 
     @discord.ui.button(label="✅ 開催を確定する", style=discord.ButtonStyle.success)
     async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        role=discord.utils.get(interaction.guild.roles,name="講師")
+        role = discord.utils.get(interaction.guild.roles, name="講師")
         if role and role not in interaction.user.roles:
-            await interaction.response.send_message("⚠️ 講師のみ可能",ephemeral=True); return
-        await interaction.response.send_message("📸 画像を添付して送信してください（スキップ可）",ephemeral=True)
-        def check(msg): return msg.author==interaction.user and msg.channel==interaction.channel
+            await interaction.response.send_message("⚠️ この操作は講師のみ可能です。", ephemeral=True)
+            return
+
+        await interaction.response.send_message(
+            "📸 このメッセージに画像を添付して送信してください。\n送らない場合は「スキップ」と返信してください。",
+            ephemeral=True
+        )
+
+        def check(msg):
+            return msg.author == interaction.user and msg.channel == interaction.channel
+
         try:
             msg = await bot.wait_for('message', check=check, timeout=300)
-            image_url = msg.attachments[0].url if msg.attachments else None if msg.content.lower()!="スキップ" else None
+            if msg.content.lower() == "スキップ":
+                image_url = None
+            elif msg.attachments:
+                image_url = msg.attachments[0].url
+            else:
+                image_url = None
         except asyncio.TimeoutError:
-            image_url=None; await interaction.channel.send("⏰ タイムアウト。スキップ扱い")
+            image_url = None
+            await interaction.channel.send("⏰ 画像送信タイムアウト。スキップ扱いにします。")
+
         if self.notice_key:
-            confirmed.setdefault(self.notice_key,{}); confirmed[self.notice_key]["image_url"]=image_url; save_confirmed()
-        locs = load_locations().get("共通",[])
-        if not locs: await interaction.channel.send("⚠️ スタジオ未登録"); return
-        view=StudioSelectView(self.date_str,locs,self.notice_key)
-        await interaction.channel.send("🏢 スタジオを選択してください",view=view)
+            confirmed.setdefault(self.notice_key, {})
+            confirmed[self.notice_key]["image_url"] = image_url
+            save_confirmed()
+
+        # スタジオ選択
+        locs = load_locations().get("共通", [])
+        if not locs:
+            await interaction.channel.send(f"⚠️ スタジオが未登録です。/place 登録 <名前> で追加してください。")
+            return
+
+        view = StudioSelectView(self.date_str, locs, self.notice_key)
+        await interaction.channel.send("🏢 スタジオを選択してください", view=view)
 
 class StudioSelectView(discord.ui.View):
-    def __init__(self,date_str,locations_list,notice_key=None):
+    def __init__(self, date_str, locations_list, notice_key=None):
         super().__init__(timeout=300)
-        options=[discord.SelectOption(label=loc) for loc in locations_list]
-        self.add_item(StudioDropdown(date_str,options,notice_key))
+        self.date_str = date_str
+        self.notice_key = notice_key
+        options = [discord.SelectOption(label=loc) for loc in locations_list]
+        self.add_item(StudioDropdown(date_str, options, notice_key))
 
 class StudioDropdown(discord.ui.Select):
-    def __init__(self,date_str,options,notice_key=None):
-        super().__init__(placeholder="スタジオを選択してください",options=options,min_values=1,max_values=1)
-        self.date_str=date_str
-        self.notice_key=notice_key
+    def __init__(self, date_str, options, notice_key=None):
+        super().__init__(placeholder="スタジオを選択してください", options=options, min_values=1, max_values=1)
+        self.date_str = date_str
+        self.notice_key = notice_key
+
     async def callback(self, interaction: discord.Interaction):
-        studio=self.values[0]
-        confirm_channel=discord.utils.get(interaction.guild.text_channels,name="人数確定通知所")
-        embed=discord.Embed(title="✅【開催確定】",description=f"{self.date_str} は **{studio}** で開催確定",color=0x00FF00)
-        if self.notice_key and confirmed.get(self.notice_key,{}).get("image_url"):
+        studio = self.values[0]
+        confirm_channel = discord.utils.get(interaction.guild.text_channels, name="人数確定通知所")
+        embed = discord.Embed(
+            title="✅【開催確定】",
+            description=f"{self.date_str} は **{studio}** で開催が確定しました。\n参加者の皆さん、よろしくお願いします！",
+            color=0x00FF00
+        )
+        if self.notice_key and confirmed.get(self.notice_key, {}).get("image_url"):
             embed.set_image(url=confirmed[self.notice_key]["image_url"])
-        if confirm_channel: await confirm_channel.send(embed=embed)
+        if confirm_channel:
+            await confirm_channel.send(embed=embed)
+
         if self.notice_key:
-            confirmed[self.notice_key].update({"final":"確定","studio":studio,"confirmed_by":interaction.user.display_name,"timestamp":datetime.datetime.now(JST).isoformat()})
+            confirmed[self.notice_key].update({
+                "final": "確定",
+                "studio": studio,
+                "confirmed_by": interaction.user.display_name,
+                "timestamp": datetime.datetime.now(JST).isoformat()
+            })
             save_confirmed()
-        try: await interaction.response.edit_message(content=f"✅ {studio} を選択",view=None)
-        except: await interaction.response.send_message(f"✅ {studio} を選択",ephemeral=True)
+
+        try:
+            await interaction.response.edit_message(content=f"✅ {studio} を選択しました。", view=None)
+        except:
+            await interaction.response.send_message(f"✅ {studio} を選択しました。", ephemeral=True)
 
 # ====== 確定通知 helper ======
-async def send_confirm_notice(guild:discord.Guild, level:str, date_str:str, participants:list, notice_key:str=None, source_channel_id:int=None):
-    confirm_channel=discord.utils.get(guild.text_channels,name="人数確定通知所")
-    if not confirm_channel: print("⚠️ チャンネルなし"); return
-    role=discord.utils.get(guild.roles,name="講師"); mention=role.mention if role else "@講師"
-    participants_list=", ".join(participants) if participants else "なし"
-    if notice_key: confirmed.setdefault(notice_key,{}); confirmed[notice_key].update({"source_channel":source_channel_id}); save_confirmed()
-    embed=discord.Embed(title="📢 人数確定通知",description=f"日程: {date_str}\n級: {level}\n参加者 ({len(participants)}人): {participants_list}\n\n{mention} さん、スタジオ抑えてください\n開催確定は下ボタンで",color=0x00BFFF)
-    view=ConfirmViewWithImage(level,date_str,notice_key)
-    await confirm_channel.send(embed=embed,view=view)
+async def send_confirm_notice(guild: discord.Guild, level: str, date_str: str, participants: list, notice_key: str = None, source_channel_id: int = None):
+    confirm_channel = discord.utils.get(guild.text_channels, name="人数確定通知所")
+    if not confirm_channel:
+        print("⚠️ 確定通知送信先チャンネルが見つかりません。")
+        return
+    role = discord.utils.get(guild.roles, name="講師")
+    mention = role.mention if role else "@講師"
+    participants_list = ", ".join(participants) if participants else "なし"
+    if notice_key:
+        confirmed.setdefault(notice_key, {})
+        confirmed[notice_key].update({"source_channel": source_channel_id})
+        save_confirmed()
+    embed = discord.Embed(
+        title="📢 人数確定通知",
+        description=(f"日程: {date_str}\n"
+                     f"級: {level}\n"
+                     f"参加者 ({len(participants)}人): {participants_list}\n\n"
+                     f"{mention} さん、スタジオを抑えてください。\n"
+                     f"開催の確定／不確定を下のボタンで選択してください。"),
+        color=0x00BFFF
+    )
+    view = ConfirmViewWithImage(level, date_str, notice_key=notice_key)
+    await confirm_channel.send(embed=embed, view=view)
 
 # ====== /place コマンド ======
-@tree.command(name="place",description="スタジオ管理")
-@app_commands.describe(action="登録/削除/一覧",name="スタジオ名(登録/削除時必須)")
-async def manage_location(interaction:discord.Interaction,action:str,name:str=None):
-    action=action.strip(); load_locations()
-    if action in ("登録","削除") and (not name or name.strip()==""):
-        await interaction.response.send_message("⚠️ 登録・削除時は名前必須",ephemeral=True); return
-    if action=="登録":
-        locations.setdefault("共通",[]); 
-        if name in locations["共通"]: await interaction.response.send_message(f"⚠️ {name} は既に登録",ephemeral=True); return
-        locations["共通"].append(name); save_locations(); await interaction.response.send_message(f"✅ {name} 登録",ephemeral=True)
-    elif action=="削除":
-        if name not in locations.get("共通",[]): await interaction.response.send_message(f"⚠️ {name} 未登録",ephemeral=True); return
-        locations["共通"].remove(name); save_locations(); await interaction.response.send_message(f"✅ {name} 削除",ephemeral=True)
-    elif action=="一覧":
-        loc_list="\n".join(locations.get("共通",[])) or "未登録"
-        await interaction.response.send_message(f"📃 スタジオ一覧:\n{loc_list}",ephemeral=True)
-    else: await interaction.response.send_message("⚠️ actionは登録/削除/一覧",ephemeral=True)
+@tree.command(name="place", description="スタジオを管理します（追加/削除/表示）")
+@app_commands.describe(action="操作: 登録 / 削除 / 一覧", name="スタジオ名（登録/削除時に指定）")
+async def manage_location(interaction: discord.Interaction, action: str, name: str = None):
+    action = action.strip()
+    load_locations()
+    if action in ("登録", "削除") and (not name or name.strip() == ""):
+        await interaction.response.send_message("⚠️ 登録・削除時は必ずスタジオ名を指定してください。", ephemeral=True)
+        return
+    if action == "登録":
+        locations.setdefault("共通", [])
+        if name in locations["共通"]:
+            await interaction.response.send_message(f"⚠️ {name} は既に登録済みです。", ephemeral=True)
+            return
+        locations["共通"].append(name)
+        save_locations()
+        await interaction.response.send_message(f"✅ {name} を登録しました。", ephemeral=True)
+    elif action == "削除":
+        if name not in locations.get("共通", []):
+            await interaction.response.send_message(f"⚠️ {name} は登録されていません。", ephemeral=True)
+            return
+        locations["共通"].remove(name)
+        save_locations()
+        await interaction.response.send_message(f"✅ {name} を削除しました。", ephemeral=True)
+    elif action == "一覧":
+        loc_list = "\n".join(locations.get("共通", [])) or "未登録"
+        await interaction.response.send_message(f"📃 登録スタジオ一覧:\n{loc_list}", ephemeral=True)
+    else:
+        await interaction.response.send_message("⚠️ action は 登録 / 削除 / 一覧 のいずれかを指定してください。", ephemeral=True)
 
-# ====== Scheduler & Step1~3 ======
-scheduler=AsyncIOScheduler(timezone=JST)
+# ====== Scheduler / Step1~3 ======
+scheduler = AsyncIOScheduler(timezone=JST)
 
 async def schedule_step1():
     await bot.wait_until_ready()
-    guild=bot.guilds[0]; start=get_schedule_start(); week_name=get_week_name(start); week=generate_week_schedule(start)
-    for cat_name in ["初級","中級"]:
-        category=discord.utils.get(guild.categories,name=cat_name)
-        ch_name=f"{week_name}-{cat_name}"
-        ch=discord.utils.get(guild.text_channels,name=ch_name) or await guild.create_text_channel(ch_name,category=category)
+    guild = bot.guilds[0]
+    start = get_schedule_start()
+    week_name = get_week_name(start)
+    week = generate_week_schedule(start)
+    for cat_name in ["初級", "中級"]:
+        category = discord.utils.get(guild.categories, name=cat_name)
+        ch_name = f"{week_name}-{cat_name}"
+        ch = discord.utils.get(guild.text_channels, name=ch_name)
+        if not ch:
+            ch = await guild.create_text_channel(ch_name, category=category)
         for date in week:
-            embed=discord.Embed(title=f"📅 {date}")
-            embed.add_field(name="参加(🟢)",value="0人",inline=False)
-            embed.add_field(name="オンライン可(🟡)",value="0人",inline=False)
-            embed.add_field(name="不可(🔴)",value="0人",inline=False)
-            view=VoteView(date)
-            msg=await ch.send(embed=embed,view=view)
-            vote_data[str(msg.id)]={"channel":ch.id,date:{"参加(🟢)":{},"オンライン可(🟡)":{},"不可(🔴)":{}}}
-    save_votes(); print("✅ Step1完了")
+            embed = discord.Embed(title=f"📅 {date}")
+            embed.add_field(name="参加(🟢)", value="0人", inline=False)
+            embed.add_field(name="オンライン可(🟡)", value="0人", inline=False)
+            embed.add_field(name="不可(🔴)", value="0人", inline=False)
+            view = VoteView(date)
+            msg = await ch.send(embed=embed, view=view)
+            vote_data[str(msg.id)] = {"channel": ch.id, date: {"参加(🟢)": {}, "オンライン可(🟡)": {}, "不可(🔴)": {}}}
+    save_votes()
+    print("✅ Step1 完了")
 
 async def schedule_step2():
-    await bot.wait_until_ready(); print("✅ Step2 (テストリマインド) 実行")
+    await bot.wait_until_ready()
+    print("✅ Step2 実行 (リマインド)")
 
 async def schedule_step3():
-    await bot.wait_until_ready(); print("✅ Step3 (1週間前催促) 実行")
+    await bot.wait_until_ready()
+    print("✅ Step3 実行 (1週間前催促)")
 
-# ====== 起動処理 ======
+# ====== on_ready ======
 @bot.event
 async def on_ready():
-    load_votes(); load_locations(); load_confirmed()
-    try: await tree.sync(); print("✅ Slash Commands synced!")
-    except Exception as e: print(f"⚠ コマンド同期エラー: {e}")
+    load_votes()
+    load_locations()
+    load_confirmed()
+    try:
+        await tree.sync()
+        print(f"✅ Slash Commands synced!")
+    except Exception as e:
+        print(f"⚠ コマンド同期エラー: {e}")
 
-    now=datetime.datetime.now(JST)
-    three_week_test=now.replace(hour=13,minute=10,second=0,microsecond=0)
-    two_week_test=now.replace(hour=13,minute=11,second=0,microsecond=0)
-    one_week_test=now.replace(hour=13,minute=12,second=0,microsecond=0)
-    
-    if three_week_test<=now: three_week_test+=datetime.timedelta(days=1)
-    if two_week_test<=now: two_week_test+=datetime.timedelta(days=1)
-    if one_week_test<=now: one_week_test+=datetime.timedelta(days=1)
-    if not scheduler.running: scheduler.start()
-    for jid in ("step1","step2","step3"):
-        try: scheduler.remove_job(jid)
-        except: pass
-    scheduler.add_job(schedule_step1,trigger=DateTrigger(run_date=three_week_test),id="step1")
-    scheduler.add_job(schedule_step2,trigger=DateTrigger(run_date=two_week_test),id="step2")
-    scheduler.add_job(schedule_step3,trigger=DateTrigger(run_date=one_week_test),id="step3")
+    now = datetime.datetime.now(JST)
+    three_week_test = now.replace(hour=14, minute=5, second=0, microsecond=0)
+    two_week_test   = now.replace(hour=14, minute=6, second=0, microsecond=0)
+    one_week_test   = now.replace(hour=14, minute=7, second=0, microsecond=0)
+
+    if three_week_test <= now: three_week_test += datetime.timedelta(days=1)
+    if two_week_test   <= now: two_week_test   += datetime.timedelta(days=1)
+    if one_week_test   <= now: one_week_test   += datetime.timedelta(days=1)
+
+    if not scheduler.running:
+        scheduler.start()
+
+    for jid in ("step1", "step2", "step3"):
+        try:
+            if scheduler.get_job(jid):
+                scheduler.remove_job(jid)
+        except Exception:
+            pass
+
+    scheduler.add_job(schedule_step1, trigger=DateTrigger(run_date=three_week_test), id="step1")
+    scheduler.add_job(schedule_step2, trigger=DateTrigger(run_date=two_week_test), id="step2")
+    scheduler.add_job(schedule_step3, trigger=DateTrigger(run_date=one_week_test), id="step3")
+
     print(f"✅ Logged in as {bot.user}")
-    print(f"✅ Scheduler started at: {three_week_test}, {two_week_test}, {one_week_test}")
+    print(f"✅ Scheduler started. Step1~3 scheduled at: {three_week_test}, {two_week_test}, {one_week_test}")
 
 # ====== Run ======
-if __name__=="__main__":
+if __name__ == "__main__":
     bot.run(TOKEN)
