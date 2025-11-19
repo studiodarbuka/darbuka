@@ -354,34 +354,49 @@ async def schedule_step3():  # テスト1週間前催促
 
 @bot.event
 async def on_ready():
+    # reload persistence
     load_votes()
     load_locations()
     load_confirmed()
+
     try:
         await tree.sync()
-        print("✅ Slash Commands synced!")
-    except Exception as e:
-        print(f"⚠ コマンド同期エラー: {e}")
+        logger.info("✅ Slash Commands synced!")
+    except Exception:
+        logger.exception("⚠ コマンド同期エラー")
 
     now = datetime.datetime.now(JST)
-    # テスト用時間
-    three_week_test = now + datetime.timedelta(seconds=10)
-    two_week_test = now + datetime.timedelta(seconds=20)
-    one_week_test = now + datetime.timedelta(seconds=30)
+    three_week_test = now.replace(hour=12, minute=30, second=0, microsecond=0)
+    two_week_test   = now.replace(hour=12, minute=32, second=0, microsecond=0)
+    one_week_test   = now.replace(hour=12, minute=36, second=0, microsecond=0)
 
+    if three_week_test <= now: three_week_test += datetime.timedelta(days=1)
+    if two_week_test   <= now: two_week_test   += datetime.timedelta(days=1)
+    if one_week_test   <= now: one_week_test   += datetime.timedelta(days=1)
+
+    # scheduler start if not running
     if not scheduler.running:
         scheduler.start()
 
-    for jid in ("step1","step2","step3"):
-        if scheduler.get_job(jid):
-            scheduler.remove_job(jid)
+    # remove duplicate jobs
+    for jid in ("step1", "step2", "step3"):
+        try:
+            if scheduler.get_job(jid):
+                scheduler.remove_job(jid)
+        except Exception:
+            pass
 
+    # register coroutine jobs directly
     scheduler.add_job(schedule_step1, trigger=DateTrigger(run_date=three_week_test), id="step1")
     scheduler.add_job(schedule_step2, trigger=DateTrigger(run_date=two_week_test), id="step2")
     scheduler.add_job(schedule_step3, trigger=DateTrigger(run_date=one_week_test), id="step3")
 
-    print(f"✅ Scheduler登録: Step1~3 テスト用")
+    logger.info(f"✅ Logged in as {bot.user}")
+    logger.info(f"✅ Scheduler started. Step1~3 scheduled at: {three_week_test}, {two_week_test}, {one_week_test}")
 
 # ====== Run ======
 if __name__ == "__main__":
     bot.run(TOKEN)
+
+
+
