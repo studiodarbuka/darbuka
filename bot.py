@@ -491,8 +491,8 @@ async def on_ready():
 
     now = datetime.datetime.now(JST)
     three_week_test = now.replace(hour=12, minute=0, second=0, microsecond=0)
-    two_week_test   = now.replace(hour=12, minute=0, second=0, microsecond=0)
-    one_week_test   = now.replace(hour=12, minute=0, second=0, microsecond=0)
+    two_week_test   = now.replace(hour=12, minute=2, second=0, microsecond=0)
+    one_week_test   = now.replace(hour=12, minute=6, second=0, microsecond=0)
 
     if three_week_test <= now: three_week_test += datetime.timedelta(days=1)
     if two_week_test   <= now: two_week_test   += datetime.timedelta(days=1)
@@ -521,3 +521,4 @@ async def on_ready():
 # ====== Run ======
 if __name__ == "__main__":
     bot.run(TOKEN)
+
