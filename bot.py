@@ -412,9 +412,9 @@ async def on_ready():
     now = datetime.datetime.now(JST)
 
     # ユーザー指定の時刻（replace を使う形式）。必要ならここを動的に変更してください。
-    three_week_test = now.replace(hour=19, minute=5, second=0, microsecond=0)
-    two_week_test   = now.replace(hour=19, minute=6, second=0, microsecond=0)
-    one_week_test   = now.replace(hour=19, minute=7, second=0, microsecond=0)
+    three_week_test = now.replace(hour=11, minute=18, second=0, microsecond=0)
+    two_week_test   = now.replace(hour=11, minute=19, second=0, microsecond=0)
+    one_week_test   = now.replace(hour=11, minute=20, second=0, microsecond=0)
 
     # 過ぎていたら翌日に補正
     if three_week_test <= now: three_week_test += datetime.timedelta(days=1)
@@ -446,3 +446,4 @@ async def on_ready():
 # ====== Render Worker 向け常時起動 ======
 if __name__ == "__main__":
     bot.run(TOKEN)
+
